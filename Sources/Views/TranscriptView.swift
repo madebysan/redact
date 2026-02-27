@@ -27,8 +27,16 @@ class TranscriptView: NSView {
         setup()
     }
 
+    /// Keeps track of the current segments for re-rendering on settings change.
+    private var currentSegments: [Segment]?
+
     private func setup() {
         wantsLayer = true
+
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(settingsDidChange),
+            name: .settingsChanged, object: nil
+        )
 
         // Scroll view
         scrollView.hasVerticalScroller = true
@@ -61,18 +69,21 @@ class TranscriptView: NSView {
 
     /// Build the transcript text from segments with paragraph breaks.
     func setTranscript(segments: [Segment]) {
+        currentSegments = segments
         wordRanges = [:]
         displayedWords = []
 
         let textStorage = NSMutableAttributedString()
+        let settings = Settings.shared
+        let fontSize = settings.transcriptFontSize
 
         let normalAttrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 15, weight: .regular),
+            .font: settings.transcriptFont(ofSize: fontSize, weight: .regular),
             .foregroundColor: Theme.wordNormal,
         ]
 
         let silenceAttrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 13, weight: .light),
+            .font: settings.transcriptFont(ofSize: fontSize - 2, weight: .light),
             .foregroundColor: Theme.silenceText,
         ]
 
@@ -128,7 +139,7 @@ class TranscriptView: NSView {
 
         // Apply new highlight
         if let id, let range = wordRanges[id] {
-            let highlightColor = Theme.wordHighlightBackground
+            let highlightColor = Settings.shared.highlightColor.withAlphaComponent(0.2)
             storage.addAttribute(.backgroundColor, value: highlightColor, range: range)
 
             // Auto-scroll to visible
@@ -161,6 +172,11 @@ class TranscriptView: NSView {
             storage.removeAttribute(.strikethroughStyle, range: range)
             storage.removeAttribute(.strikethroughColor, range: range)
         }
+    }
+
+    @objc private func settingsDidChange() {
+        guard let segments = currentSegments else { return }
+        setTranscript(segments: segments)
     }
 
     /// Get the word ID at a given point in the view.

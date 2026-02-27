@@ -47,6 +47,11 @@ class TranscribeProgressView: NSView {
         cancelButton.translatesAutoresizingMaskIntoConstraints = false
         addSubview(cancelButton)
 
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(settingsDidChange),
+            name: .settingsChanged, object: nil
+        )
+
         NSLayoutConstraint.activate([
             spinner.centerXAnchor.constraint(equalTo: centerXAnchor),
             spinner.centerYAnchor.constraint(equalTo: centerYAnchor, constant: -40),
@@ -60,6 +65,11 @@ class TranscribeProgressView: NSView {
             cancelButton.centerXAnchor.constraint(equalTo: centerXAnchor),
             cancelButton.topAnchor.constraint(equalTo: progressLabel.bottomAnchor, constant: 20),
         ])
+    }
+
+    @objc private func settingsDidChange() {
+        statusLabel.textColor = Theme.textSecondary
+        progressLabel.textColor = Theme.silenceText
     }
 
     func updateProgress(_ progress: TranscribeProgress) {

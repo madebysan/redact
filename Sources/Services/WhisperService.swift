@@ -8,9 +8,10 @@ class WhisperService {
     /// Transcribe an audio file using Whisper.
     func transcribe(
         audioPath: String,
-        model: String = "small",
+        model: String? = nil,
         onProgress: @escaping (TranscribeProgress) -> Void
     ) async throws -> RawTranscript {
+        let model = model ?? Settings.shared.whisperModel
         // Find Python — prefer venv, fall back to system
         let pythonPath: String
         if let venv = PathUtilities.findVenv() {

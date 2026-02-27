@@ -6,8 +6,10 @@ class MainWindowController: NSWindowController {
     let project = ProjectDocument()
     let ffmpegService = FFmpegService()
     let whisperService = WhisperService()
+    let elevenLabsService = ElevenLabsService()
     let playbackController = PlaybackController()
     let wordSelectionController = WordSelectionController()
+    private var exportSheetWindow: NSWindow?
 
     convenience init() {
         let window = NSWindow(
@@ -22,7 +24,6 @@ class MainWindowController: NSWindowController {
         window.backgroundColor = Theme.surface0
         window.title = "Redact"
         window.center()
-        window.isMovableByWindowBackground = true
 
         self.init(window: window)
 
@@ -30,6 +31,37 @@ class MainWindowController: NSWindowController {
         window.contentViewController = splitViewController
 
         setupToolbar()
+        setupKeyMonitor()
+
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(settingsDidChange),
+            name: .settingsChanged, object: nil
+        )
+    }
+
+    @objc private func settingsDidChange() {
+        window?.backgroundColor = Theme.surface0
+    }
+
+    // MARK: - Key Monitor
+
+    /// Intercepts Space and Delete before focused buttons can consume them.
+    private func setupKeyMonitor() {
+        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self, event.window == self.window else { return event }
+            guard self.project.appState == .editing else { return event }
+
+            switch event.keyCode {
+            case 49: // Spacebar
+                self.togglePlayPause(nil)
+                return nil
+            case 51: // Delete (backspace)
+                self.deleteSelected(nil)
+                return nil
+            default:
+                return event
+            }
+        }
     }
 
     // MARK: - Toolbar
@@ -82,46 +114,236 @@ class MainWindowController: NSWindowController {
     }
 
     @objc func exportVideo(_ sender: Any?) {
-        guard project.appState == .editing, let inputPath = project.filePath else { return }
+        guard project.appState == .editing, let _ = project.filePath else { return }
+        guard let mainWindow = window else { return }
 
-        let panel = NSSavePanel()
-        panel.allowedContentTypes = [.mpeg4Movie]
-        panel.nameFieldStringValue = URL(fileURLWithPath: inputPath).deletingPathExtension().lastPathComponent + "_edited.mp4"
-        panel.message = "Export edited video"
+        let sheetView = ExportSheetView(frame: NSRect(x: 0, y: 0, width: 420, height: 360))
 
-        panel.beginSheetModal(for: window!) { [weak self] response in
-            guard response == .OK, let url = panel.url, let self else { return }
+        let sheetWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 360),
+                                   styleMask: [.titled],
+                                   backing: .buffered,
+                                   defer: false)
+        sheetWindow.contentView = sheetView
+        sheetWindow.title = "Export"
+        self.exportSheetWindow = sheetWindow
 
-            let keptRanges = buildKeptRanges(self.project.allWords, totalDuration: self.project.duration)
-            let editedDuration = calculateEditedDuration(self.project.allWords, totalDuration: self.project.duration)
+        sheetView.onCancel = { [weak self] in
+            guard let self, let sheet = self.exportSheetWindow else { return }
+            self.window?.endSheet(sheet)
+            self.exportSheetWindow = nil
+        }
 
-            self.project.appState = .exporting
-            self.project.exportProgress = 0
+        sheetView.onExportSRT = { [weak self] in
+            guard let self, let sheet = self.exportSheetWindow else { return }
+            self.window?.endSheet(sheet)
+            self.exportSheetWindow = nil
+            self.exportSRT(nil)
+        }
 
-            Task {
-                do {
-                    try await self.ffmpegService.exportVideo(
+        sheetView.onExportVideo = { [weak self] format, quality, speed, voiceOption in
+            guard let self, let inputPath = self.project.filePath else { return }
+
+            // Determine file extension and content type
+            let ext: String
+            switch format {
+            case "mkv": ext = "mkv"
+            case "webm": ext = "webm"
+            default: ext = "mp4"
+            }
+
+            let baseName = URL(fileURLWithPath: inputPath).deletingPathExtension().lastPathComponent
+            let panel = NSSavePanel()
+            if let uttype = UTType(filenameExtension: ext) {
+                panel.allowedContentTypes = [uttype]
+            }
+            panel.nameFieldStringValue = "\(baseName)_edited.\(ext)"
+            panel.message = "Export edited video"
+
+            // End sheet before showing save panel
+            if let sheet = self.exportSheetWindow {
+                self.window?.endSheet(sheet)
+            }
+
+            panel.beginSheetModal(for: mainWindow) { [weak self] response in
+                guard response == .OK, let url = panel.url, let self else {
+                    self?.exportSheetWindow = nil
+                    return
+                }
+
+                // Re-present the sheet in progress mode
+                sheetView.showProgressMode(status: "Preparing export...")
+                mainWindow.beginSheet(sheetWindow) { _ in }
+
+                self.performExport(
+                    inputPath: inputPath,
+                    outputURL: url,
+                    format: format,
+                    quality: quality,
+                    speed: speed,
+                    voiceOption: voiceOption,
+                    sheetView: sheetView
+                )
+            }
+        }
+
+        sheetView.onDismiss = { [weak self] in
+            guard let self, let sheet = self.exportSheetWindow else { return }
+            self.window?.endSheet(sheet)
+            self.exportSheetWindow = nil
+        }
+
+        mainWindow.beginSheet(sheetWindow) { _ in }
+    }
+
+    /// Performs the full export pipeline: video export + optional voice recreation.
+    /// Updates the export sheet with progress, errors, and completion.
+    private func performExport(
+        inputPath: String,
+        outputURL: URL,
+        format: String,
+        quality: String?,
+        speed: Double,
+        voiceOption: ExportVoiceOption,
+        sheetView: ExportSheetView
+    ) {
+        let keptRanges = buildKeptRanges(project.allWords, totalDuration: project.duration)
+        let editedDuration = calculateEditedDuration(project.allWords, totalDuration: project.duration)
+
+        project.appState = .exporting
+        project.exportProgress = 0
+
+        Task {
+            do {
+                switch voiceOption {
+                case .original:
+                    await MainActor.run {
+                        sheetView.updateProgress(0, status: "Exporting video...")
+                    }
+
+                    try await ffmpegService.exportVideo(
                         inputPath: inputPath,
-                        outputPath: url.path,
+                        outputPath: outputURL.path,
                         segments: keptRanges,
+                        format: format,
+                        quality: quality,
+                        speed: speed,
                         onProgress: { [weak self] percent in
                             DispatchQueue.main.async {
                                 self?.project.exportProgress = percent
+                                sheetView.updateProgress(percent)
                             }
                         },
                         totalDuration: editedDuration
                     )
-                    await MainActor.run {
-                        self.project.appState = .editing
-                        self.project.exportProgress = nil
-                        NSWorkspace.shared.activateFileViewerSelecting([url])
+
+                case .elevenLabs(let voiceId):
+                    let apiKey = Settings.shared.elevenLabsApiKey
+                    guard !apiKey.isEmpty else {
+                        throw ElevenLabsError.apiKeyMissing
                     }
-                } catch {
+
+                    // Phase 1: Export video to temp file (0–55%)
                     await MainActor.run {
-                        self.project.appState = .editing
-                        self.project.exportProgress = nil
-                        self.showError(error.localizedDescription)
+                        sheetView.updateProgress(0, status: "Exporting video...")
                     }
+
+                    let tempVideoPath = PathUtilities.tempDir + "/temp_export.\(format)"
+                    try? FileManager.default.removeItem(atPath: tempVideoPath)
+
+                    try await ffmpegService.exportVideo(
+                        inputPath: inputPath,
+                        outputPath: tempVideoPath,
+                        segments: keptRanges,
+                        format: format,
+                        quality: quality,
+                        speed: speed,
+                        onProgress: { [weak self] percent in
+                            DispatchQueue.main.async {
+                                let scaled = percent * 0.55
+                                self?.project.exportProgress = scaled
+                                sheetView.updateProgress(scaled)
+                            }
+                        },
+                        totalDuration: editedDuration
+                    )
+
+                    // Phase 2: Extract audio (55–60%)
+                    await MainActor.run {
+                        self.project.exportProgress = 55
+                        sheetView.updateProgress(55, status: "Extracting audio...")
+                    }
+
+                    let tempAudioPath = try await ffmpegService.extractAudioForSTS(from: tempVideoPath)
+
+                    // Phase 3: Send to ElevenLabs STS (60–85%)
+                    await MainActor.run {
+                        self.project.exportProgress = 60
+                        sheetView.updateProgress(60, status: "Converting voice with ElevenLabs...")
+                    }
+
+                    let result = try await elevenLabsService.convertVoice(
+                        audioPath: tempAudioPath,
+                        voiceId: voiceId,
+                        apiKey: apiKey,
+                        onProgress: { status in
+                            DispatchQueue.main.async {
+                                sheetView.updateProgress(75, status: "Converting voice with ElevenLabs...")
+                            }
+                        }
+                    )
+
+                    // Phase 4: Replace audio in video (85–98%)
+                    await MainActor.run {
+                        self.project.exportProgress = 85
+                        sheetView.updateProgress(85, status: "Replacing audio track...")
+                    }
+
+                    try await ffmpegService.replaceAudio(
+                        videoPath: tempVideoPath,
+                        audioPath: result.audioPath,
+                        outputPath: outputURL.path,
+                        onProgress: { [weak self] percent in
+                            DispatchQueue.main.async {
+                                let scaled = 85 + percent * 0.13
+                                self?.project.exportProgress = scaled
+                                sheetView.updateProgress(scaled)
+                            }
+                        },
+                        totalDuration: editedDuration
+                    )
+
+                    // Phase 5: Delete history item from ElevenLabs (fire-and-forget)
+                    await MainActor.run {
+                        sheetView.updateProgress(98, status: "Cleaning up...")
+                    }
+
+                    if let historyId = result.historyItemId {
+                        Task {
+                            try? await self.elevenLabsService.deleteHistoryItem(
+                                historyItemId: historyId,
+                                apiKey: apiKey
+                            )
+                        }
+                    }
+
+                    // Clean up temp files
+                    try? FileManager.default.removeItem(atPath: tempVideoPath)
+                    try? FileManager.default.removeItem(atPath: tempAudioPath)
+                    try? FileManager.default.removeItem(atPath: result.audioPath)
+                }
+
+                // Success
+                await MainActor.run {
+                    self.project.appState = .editing
+                    self.project.exportProgress = nil
+                    sheetView.showComplete()
+                    NSWorkspace.shared.activateFileViewerSelecting([outputURL])
+                }
+            } catch {
+                await MainActor.run {
+                    self.project.appState = .editing
+                    self.project.exportProgress = nil
+                    sheetView.showError(error.localizedDescription)
                 }
             }
         }
@@ -191,6 +413,20 @@ class MainWindowController: NSWindowController {
         playbackController.skip(seconds: 5)
     }
 
+    @objc func closeProject(_ sender: Any?) {
+        guard project.appState != .empty else { return }
+        playbackController.player.pause()
+        playbackController.player.replaceCurrentItem(with: nil)
+        whisperService.cancel()
+        project.reset()
+        splitViewController.showEmptyState()
+        updateToolbarState()
+    }
+
+    @objc func openSettings(_ sender: Any?) {
+        SettingsWindowController.show()
+    }
+
     // MARK: - File Handling
 
     func handleImportedFile(_ url: URL) {
@@ -234,20 +470,89 @@ class MainWindowController: NSWindowController {
             let json = try String(contentsOf: url, encoding: .utf8)
             let projectFile = try deserializeProject(json)
 
-            project.loadProject(
-                segments: projectFile.segments,
-                language: projectFile.language,
-                duration: projectFile.duration,
-                filePath: url.path
-            )
+            // Try to find the original video file
+            let videoFileName = projectFile.videoFile
+            let videoPath = resolveVideoPath(videoFileName: videoFileName, storedPath: projectFile.videoPath, rdtFileURL: url)
 
-            updateWindowTitle(fileName: projectFile.videoFile)
-            splitViewController.showEditing(segments: project.segments)
-            setupEditingBindings()
-            enableEditingToolbar()
+            if let videoPath {
+                finishLoadingProject(projectFile: projectFile, videoPath: videoPath)
+            } else {
+                // Video not found — ask user to locate it
+                promptForVideoFile(videoFileName: videoFileName) { [weak self] selectedPath in
+                    guard let self else { return }
+                    if let selectedPath {
+                        self.finishLoadingProject(projectFile: projectFile, videoPath: selectedPath)
+                    } else {
+                        // User cancelled — load without video (transcript only)
+                        self.finishLoadingProject(projectFile: projectFile, videoPath: nil)
+                    }
+                }
+            }
         } catch {
             showError(error.localizedDescription)
         }
+    }
+
+    /// Search common locations for the original video file.
+    private func resolveVideoPath(videoFileName: String, storedPath: String?, rdtFileURL: URL) -> String? {
+        var candidates: [String] = []
+
+        // First priority: the stored full path from the .rdt file
+        if let storedPath, !storedPath.isEmpty {
+            candidates.append(storedPath)
+        }
+
+        candidates += [
+            // Same directory as the .rdt file
+            rdtFileURL.deletingLastPathComponent().appendingPathComponent(videoFileName).path,
+            // Desktop
+            NSHomeDirectory() + "/Desktop/" + videoFileName,
+            // Downloads
+            NSHomeDirectory() + "/Downloads/" + videoFileName,
+            // Projects folder
+            NSHomeDirectory() + "/Projects/" + videoFileName,
+        ]
+
+        for path in candidates {
+            if FileManager.default.fileExists(atPath: path) {
+                return path
+            }
+        }
+
+        return nil
+    }
+
+    /// Show an open panel asking the user to locate the video file.
+    private func promptForVideoFile(videoFileName: String, completion: @escaping (String?) -> Void) {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = Self.supportedMediaTypes
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.message = "Locate the original video file: \(videoFileName)"
+        panel.prompt = "Select Video"
+
+        panel.beginSheetModal(for: window!) { response in
+            if response == .OK, let url = panel.url {
+                completion(url.path)
+            } else {
+                completion(nil)
+            }
+        }
+    }
+
+    /// Finish loading a project after the video path is resolved.
+    private func finishLoadingProject(projectFile: ProjectFile, videoPath: String?) {
+        project.loadProject(
+            segments: projectFile.segments,
+            language: projectFile.language,
+            duration: projectFile.duration,
+            filePath: videoPath ?? ""
+        )
+
+        updateWindowTitle(fileName: projectFile.videoFile)
+        splitViewController.showEditing(segments: project.segments)
+        setupEditingBindings()
+        enableEditingToolbar()
     }
 
     private func startTranscription(audioPath: String) {
@@ -401,12 +706,26 @@ class MainWindowController: NSWindowController {
         guard let toolbar = window?.toolbar else { return }
         for item in toolbar.items {
             switch item.itemIdentifier {
-            case Self.saveItem, Self.exportItem, Self.undoItem, Self.redoItem:
+            case Self.saveItem, Self.exportItem, Self.undoItem, Self.redoItem, Self.closeProjectItem:
                 item.isEnabled = true
             default:
                 break
             }
         }
+    }
+
+    func updateToolbarState() {
+        guard let toolbar = window?.toolbar else { return }
+        let editing = project.appState == .editing
+        for item in toolbar.items {
+            switch item.itemIdentifier {
+            case Self.saveItem, Self.exportItem, Self.undoItem, Self.redoItem, Self.closeProjectItem:
+                item.isEnabled = editing
+            default:
+                break
+            }
+        }
+        window?.title = editing ? window?.title ?? "Redact" : "Redact"
     }
 
     func updateWindowTitle(fileName: String?) {
@@ -450,6 +769,8 @@ extension MainWindowController: NSToolbarDelegate {
     static let exportItem = NSToolbarItem.Identifier("export")
     static let undoItem = NSToolbarItem.Identifier("undo")
     static let redoItem = NSToolbarItem.Identifier("redo")
+    static let closeProjectItem = NSToolbarItem.Identifier("closeProject")
+    static let settingsItem = NSToolbarItem.Identifier("settings")
     static let flexibleSpace = NSToolbarItem.Identifier.flexibleSpace
 
     func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier, willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
@@ -459,7 +780,7 @@ extension MainWindowController: NSToolbarDelegate {
         case Self.importItem:
             item.label = "Import"
             item.toolTip = "Import media file"
-            item.image = NSImage(systemSymbolName: "square.and.arrow.down", accessibilityDescription: "Import")
+            item.image = NSImage(systemSymbolName: "plus", accessibilityDescription: "Import")
             item.action = #selector(importMedia(_:))
             item.target = self
 
@@ -495,6 +816,21 @@ extension MainWindowController: NSToolbarDelegate {
             item.target = self
             item.isEnabled = false
 
+        case Self.closeProjectItem:
+            item.label = "Discard"
+            item.toolTip = "Close current project"
+            item.image = NSImage(systemSymbolName: "trash", accessibilityDescription: "Discard")
+            item.action = #selector(closeProject(_:))
+            item.target = self
+            item.isEnabled = false
+
+        case Self.settingsItem:
+            item.label = "Settings"
+            item.toolTip = "Open Preferences"
+            item.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: "Settings")
+            item.action = #selector(openSettings(_:))
+            item.target = self
+
         default:
             return nil
         }
@@ -503,10 +839,10 @@ extension MainWindowController: NSToolbarDelegate {
     }
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [Self.importItem, Self.flexibleSpace, Self.undoItem, Self.redoItem, Self.flexibleSpace, Self.saveItem, Self.exportItem]
+        [Self.flexibleSpace, Self.importItem, .space, Self.undoItem, Self.redoItem, .space, Self.saveItem, Self.exportItem, .space, Self.closeProjectItem, .space, Self.settingsItem]
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [Self.importItem, Self.saveItem, Self.exportItem, Self.undoItem, Self.redoItem, Self.flexibleSpace]
+        [Self.importItem, Self.saveItem, Self.exportItem, Self.undoItem, Self.redoItem, Self.closeProjectItem, Self.settingsItem, Self.flexibleSpace, .space]
     }
 }

@@ -14,6 +14,12 @@ class MainSplitViewController: NSViewController {
     private var leftPanel: NSView!
     private var rightPanel: NSView!
 
+    /// The constraint that controls the left panel width (draggable).
+    private var leftPanelWidthConstraint: NSLayoutConstraint?
+
+    /// Minimum width for either panel.
+    private let panelMinWidth: CGFloat = 250
+
     private var currentState: AppState = .empty
 
     override func loadView() {
@@ -27,6 +33,16 @@ class MainSplitViewController: NSViewController {
         super.viewDidLoad()
         setupErrorBanner()
         showEmptyState()
+
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(settingsDidChange),
+            name: .settingsChanged, object: nil
+        )
+    }
+
+    @objc private func settingsDidChange() {
+        view.layer?.backgroundColor = Theme.surface0.cgColor
+        splitDivider?.layer?.backgroundColor = Theme.divider.cgColor
     }
 
     private func setupErrorBanner() {
@@ -138,10 +154,9 @@ class MainSplitViewController: NSViewController {
         transportControlsView.translatesAutoresizingMaskIntoConstraints = false
         leftPanel.addSubview(transportControlsView)
 
-        // Divider
-        splitDivider = NSView()
+        // Divider (6pt wide hit area, 1pt visible line)
+        splitDivider = DividerView()
         splitDivider.wantsLayer = true
-        splitDivider.layer?.backgroundColor = Theme.divider.cgColor
         splitDivider.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(splitDivider)
 
@@ -160,6 +175,11 @@ class MainSplitViewController: NSViewController {
         waveformView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(waveformView)
 
+        // Left panel width: start at 40%, stored as constant so we can drag it
+        let initialWidth = view.bounds.width * 0.4
+        let widthConstraint = leftPanel.widthAnchor.constraint(equalToConstant: initialWidth)
+        leftPanelWidthConstraint = widthConstraint
+
         NSLayoutConstraint.activate([
             // Waveform bar: 60pt at bottom, full width
             waveformView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
@@ -167,11 +187,11 @@ class MainSplitViewController: NSViewController {
             waveformView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             waveformView.heightAnchor.constraint(equalToConstant: 60),
 
-            // Left panel: 40% width, above waveform
+            // Left panel: variable width, above waveform
             leftPanel.topAnchor.constraint(equalTo: view.topAnchor),
             leftPanel.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             leftPanel.bottomAnchor.constraint(equalTo: waveformView.topAnchor),
-            leftPanel.widthAnchor.constraint(equalTo: view.widthAnchor, multiplier: 0.4),
+            widthConstraint,
 
             // Video preview (fills top of left panel)
             videoPreviewView.topAnchor.constraint(equalTo: leftPanel.topAnchor),
@@ -185,15 +205,15 @@ class MainSplitViewController: NSViewController {
             transportControlsView.bottomAnchor.constraint(equalTo: leftPanel.bottomAnchor),
             transportControlsView.heightAnchor.constraint(equalToConstant: 60),
 
-            // Divider (1pt wide)
+            // Divider (6pt wide for easy grabbing)
             splitDivider.topAnchor.constraint(equalTo: view.topAnchor),
             splitDivider.bottomAnchor.constraint(equalTo: waveformView.topAnchor),
-            splitDivider.leadingAnchor.constraint(equalTo: leftPanel.trailingAnchor),
-            splitDivider.widthAnchor.constraint(equalToConstant: 1),
+            splitDivider.leadingAnchor.constraint(equalTo: leftPanel.trailingAnchor, constant: -3),
+            splitDivider.widthAnchor.constraint(equalToConstant: 6),
 
-            // Right panel: 60% width, above waveform
+            // Right panel: fills remaining width, above waveform
             rightPanel.topAnchor.constraint(equalTo: view.topAnchor),
-            rightPanel.leadingAnchor.constraint(equalTo: splitDivider.trailingAnchor),
+            rightPanel.leadingAnchor.constraint(equalTo: leftPanel.trailingAnchor),
             rightPanel.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             rightPanel.bottomAnchor.constraint(equalTo: waveformView.topAnchor),
 
@@ -204,6 +224,9 @@ class MainSplitViewController: NSViewController {
             transcriptView.bottomAnchor.constraint(equalTo: rightPanel.bottomAnchor),
         ])
 
+        // Setup divider dragging
+        setupDividerDragging()
+
         transcriptView.setTranscript(segments: segments)
     }
 
@@ -211,6 +234,39 @@ class MainSplitViewController: NSViewController {
     func showTranscript(segments: [Segment]) {
         showEditing(segments: segments)
     }
+
+    // MARK: - Divider Dragging
+
+    private func setupDividerDragging() {
+        // Mouse down on divider starts drag
+        NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDragged]) { [weak self] event in
+            guard let self, self.currentState == .editing,
+                  let divider = self.splitDivider,
+                  let eventWindow = event.window,
+                  eventWindow == self.view.window else { return event }
+
+            // Check if drag started near the divider
+            let locationInView = self.view.convert(event.locationInWindow, from: nil)
+            let dividerFrame = divider.frame
+
+            // Only handle drags near the divider (within 20pt for initial grab)
+            if self.isDraggingDivider || abs(locationInView.x - dividerFrame.midX) < 20 {
+                self.isDraggingDivider = true
+                let newWidth = locationInView.x
+                let clamped = max(self.panelMinWidth, min(newWidth, self.view.bounds.width - self.panelMinWidth))
+                self.leftPanelWidthConstraint?.constant = clamped
+                return nil // Consume the event
+            }
+            return event
+        }
+
+        NSEvent.addLocalMonitorForEvents(matching: [.leftMouseUp]) { [weak self] event in
+            self?.isDraggingDivider = false
+            return event
+        }
+    }
+
+    private var isDraggingDivider = false
 
     private func clearContent() {
         // Remove all subviews except the error banner
@@ -228,5 +284,51 @@ class MainSplitViewController: NSViewController {
         splitDivider = nil
         leftPanel = nil
         rightPanel = nil
+        leftPanelWidthConstraint = nil
+    }
+}
+
+// MARK: - Divider View
+
+/// A thin visible divider line with a wider hit area. Shows resize cursor on hover.
+private class DividerView: NSView {
+    private let lineLayer = CALayer()
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        setup()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        setup()
+    }
+
+    private func setup() {
+        wantsLayer = true
+
+        // The view is 6pt wide but only the center 1pt line is visible
+        lineLayer.backgroundColor = Theme.divider.cgColor
+        layer?.addSublayer(lineLayer)
+
+        // Listen for theme changes
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(settingsDidChange),
+            name: .settingsChanged, object: nil
+        )
+    }
+
+    override func layout() {
+        super.layout()
+        // Center a 1pt line in the 6pt hit area
+        lineLayer.frame = CGRect(x: bounds.midX - 0.5, y: 0, width: 1, height: bounds.height)
+    }
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .resizeLeftRight)
+    }
+
+    @objc private func settingsDidChange() {
+        lineLayer.backgroundColor = Theme.divider.cgColor
     }
 }

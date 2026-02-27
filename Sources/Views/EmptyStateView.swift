@@ -14,7 +14,7 @@ class EmptyStateView: NSView {
     private let subtitleLabel = NSTextField(labelWithString: "MP4, MKV, WebM, MOV, AVI, MP3, WAV, M4A")
     private let importButton = NSButton()
     private let orLabel = NSTextField(labelWithString: "or")
-    private let dashedBorder = CAShapeLayer()
+    private var dashedBorder: CAShapeLayer?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -68,12 +68,10 @@ class EmptyStateView: NSView {
         importButton.translatesAutoresizingMaskIntoConstraints = false
         addSubview(importButton)
 
-        // Dashed border layer
-        dashedBorder.fillColor = nil
-        dashedBorder.strokeColor = NSColor(white: 0.2, alpha: 1).cgColor
-        dashedBorder.lineWidth = 1.5
-        dashedBorder.lineDashPattern = [8, 6]
-        layer?.addSublayer(dashedBorder)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(settingsDidChange),
+            name: .settingsChanged, object: nil
+        )
 
         NSLayoutConstraint.activate([
             iconView.centerXAnchor.constraint(equalTo: centerXAnchor),
@@ -97,17 +95,35 @@ class EmptyStateView: NSView {
 
     override func layout() {
         super.layout()
-        updateDashedBorder()
+        updateDragHighlight()
     }
 
-    private func updateDashedBorder() {
-        let inset: CGFloat = 40
-        let rect = bounds.insetBy(dx: inset, dy: inset)
-        let path = NSBezierPath(roundedRect: rect, xRadius: 12, yRadius: 12)
-        dashedBorder.path = path.cgPath
-        dashedBorder.strokeColor = isDragHighlighted
-            ? Theme.accent.withAlphaComponent(0.6).cgColor
-            : NSColor(white: 0.2, alpha: 1).cgColor
+    private func updateDragHighlight() {
+        if isDragHighlighted {
+            if dashedBorder == nil {
+                let border = CAShapeLayer()
+                border.fillColor = nil
+                border.lineWidth = 1.5
+                border.lineDashPattern = [8, 6]
+                layer?.addSublayer(border)
+                dashedBorder = border
+            }
+            let inset: CGFloat = 40
+            let rect = bounds.insetBy(dx: inset, dy: inset)
+            let path = NSBezierPath(roundedRect: rect, xRadius: 12, yRadius: 12)
+            dashedBorder?.path = path.cgPath
+            dashedBorder?.strokeColor = Theme.accent.withAlphaComponent(0.6).cgColor
+        } else {
+            dashedBorder?.removeFromSuperlayer()
+            dashedBorder = nil
+        }
+    }
+
+    @objc private func settingsDidChange() {
+        iconView.contentTintColor = Theme.textDimmed
+        titleLabel.textColor = Theme.textSecondary
+        subtitleLabel.textColor = Theme.silenceText
+        orLabel.textColor = Theme.textDimmed
     }
 
     @objc private func importClicked() {
