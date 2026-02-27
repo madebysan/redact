@@ -5,7 +5,7 @@
 <p align="center">Remove unwanted words from video.<br>
 Click words in the transcript to delete them — Redact cuts them from the video.</p>
 <p align="center"><strong>Version 1.1.0</strong> · macOS 14+ · Apple Silicon & Intel</p>
-<p align="center"><a href="https://github.com/madebysan/Redact-Swift/releases/latest"><strong>Download Redact</strong></a></p>
+<p align="center"><a href="https://github.com/madebysan/redact/releases/latest"><strong>Download Redact</strong></a></p>
 
 ---
 
@@ -59,11 +59,11 @@ source ~/.venv/whisper/bin/activate
 pip install faster-whisper
 ```
 
-Redact looks for a venv at `~/Projects/redact/.venv` and `~/Projects/Redact-Swift/.venv`, or falls back to system Python.
+Redact looks for a venv at `~/Projects/redact/.venv`, or falls back to system Python.
 
 ## Install
 
-1. Download the latest `.dmg` from [Releases](https://github.com/madebysan/Redact-Swift/releases/latest)
+1. Download the latest `.dmg` from [Releases](https://github.com/madebysan/redact/releases/latest)
 2. Open the DMG and drag **Redact** to Applications
 3. Launch Redact — if macOS blocks it, go to System Settings > Privacy & Security and click "Open Anyway"
 
@@ -87,8 +87,8 @@ Redact looks for a venv at `~/Projects/redact/.venv` and `~/Projects/Redact-Swif
 ## Building from source
 
 ```bash
-git clone https://github.com/madebysan/Redact-Swift.git
-cd Redact-Swift
+git clone https://github.com/madebysan/redact.git
+cd redact
 swift build
 swift run Redact
 ```

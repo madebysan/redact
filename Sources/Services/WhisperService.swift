@@ -29,7 +29,6 @@ class WhisperService {
         } else {
             // Fallback: check known locations
             let candidates = [
-                NSHomeDirectory() + "/Projects/Redact-Swift/scripts/whisper-transcribe.py",
                 NSHomeDirectory() + "/Projects/redact/scripts/whisper-transcribe.py",
             ]
             scriptPath = candidates.first { FileManager.default.fileExists(atPath: $0) }
