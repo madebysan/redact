@@ -2,8 +2,8 @@
   <img src="assets/app-icon.png" width="128" height="128" alt="Redact app icon">
 </p>
 <h1 align="center">Redact</h1>
-<p align="center">Remove unwanted words from video.<br>
-Click words in the transcript to delete them — Redact cuts them from the video.</p>
+<p align="center">Video editing without the video editor.<br>
+Just a transcript, your clicks, and a clean export.</p>
 <p align="center"><strong>Version 1.2.0</strong> · macOS 14+ · Apple Silicon & Intel</p>
 <p align="center"><a href="https://github.com/madebysan/redact/releases/latest"><strong>Download Redact</strong></a></p>
 
