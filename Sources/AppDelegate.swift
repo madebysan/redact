@@ -15,8 +15,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             rawIcon = icon
         } else {
             let candidates = [
-                NSHomeDirectory() + "/Projects/Redact-Swift/Sources/Resources/icon.icns",
-                NSHomeDirectory() + "/Projects/Redact-Swift/assets/icon.icns",
+                NSHomeDirectory() + "/Projects/redact/Sources/Resources/icon.icns",
+                NSHomeDirectory() + "/Projects/redact/assets/icon.icns",
             ]
             for path in candidates {
                 if let icon = NSImage(contentsOfFile: path) {

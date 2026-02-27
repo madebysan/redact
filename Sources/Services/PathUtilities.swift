@@ -63,7 +63,6 @@ enum PathUtilities {
     static func findVenv() -> String? {
         let candidates = [
             NSHomeDirectory() + "/Projects/redact/.venv",
-            NSHomeDirectory() + "/Projects/Redact-Swift/.venv",
         ]
 
         for path in candidates {
