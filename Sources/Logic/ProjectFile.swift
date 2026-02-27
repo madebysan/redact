@@ -4,6 +4,7 @@ import Foundation
 struct ProjectFile: Codable {
     let version: Int
     let videoFile: String
+    let videoPath: String?
     let language: String
     let duration: Double
     let segments: [Segment]
@@ -16,6 +17,7 @@ func serializeProject(segments: [Segment], language: String, duration: Double, v
     let project = ProjectFile(
         version: 1,
         videoFile: videoFile,
+        videoPath: videoFilePath.isEmpty ? nil : videoFilePath,
         language: language,
         duration: duration,
         segments: segments

@@ -1,20 +1,44 @@
 import AppKit
 import UniformTypeIdentifiers
 
-/// Modal sheet for export settings: format, quality, speed + progress.
+/// Voice option for export: use original audio or recreate with ElevenLabs.
+enum ExportVoiceOption {
+    case original
+    case elevenLabs(voiceId: String)
+}
+
+/// Modal sheet for export settings: format, quality, speed, voice + progress.
 class ExportSheetView: NSView {
-    var onExportVideo: ((String, String?, Double) -> Void)?  // (format, quality, speed)
+    var onExportVideo: ((String, String?, Double, ExportVoiceOption) -> Void)?  // (format, quality, speed, voice)
     var onExportSRT: (() -> Void)?
     var onCancel: (() -> Void)?
+    var onDismiss: (() -> Void)?  // dismiss after completion/error
 
+    private let elevenLabsService = ElevenLabsService()
+    private var fetchedVoices: [(id: String, name: String, category: String)] = []
+
+    // Options controls
     private let formatPopup = NSPopUpButton()
     private let qualityPopup = NSPopUpButton()
     private let speedPopup = NSPopUpButton()
+    private let voiceControl = NSSegmentedControl()
+    private let voicePopup = NSPopUpButton()
+    private let customVoiceField = NSTextField()
+    private let customVoiceLabel = NSTextField(labelWithString: "Voice ID:")
+    private let voiceWarningLabel = NSTextField(labelWithString: "")
     private let exportVideoButton = NSButton()
     private let exportSRTButton = NSButton()
     private let cancelButton = NSButton()
+
+    // All option views (to hide/show as a group)
+    private var optionViews: [NSView] = []
+
+    // Progress views
     private let progressIndicator = NSProgressIndicator()
-    private let progressLabel = NSTextField(labelWithString: "")
+    private let statusLabel = NSTextField(labelWithString: "")
+    private let percentLabel = NSTextField(labelWithString: "")
+    private let errorLabel = NSTextField(wrappingLabelWithString: "")
+    private let dismissButton = NSButton()
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -68,9 +92,73 @@ class ExportSheetView: NSView {
         speedPopup.translatesAutoresizingMaskIntoConstraints = false
         addSubview(speedPopup)
 
+        // Voice
+        let voiceLabel = NSTextField(labelWithString: "Voice:")
+        voiceLabel.font = .systemFont(ofSize: 13)
+        voiceLabel.textColor = Theme.textSecondary
+        voiceLabel.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(voiceLabel)
+
+        voiceControl.segmentCount = 2
+        voiceControl.setLabel("Original Audio", forSegment: 0)
+        voiceControl.setLabel("Recreate Voice", forSegment: 1)
+        voiceControl.segmentStyle = .rounded
+        voiceControl.selectedSegment = 0
+        voiceControl.target = self
+        voiceControl.action = #selector(voiceOptionChanged)
+        voiceControl.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(voiceControl)
+
+        let voicePickerLabel = NSTextField(labelWithString: "Voice:")
+        voicePickerLabel.font = .systemFont(ofSize: 12)
+        voicePickerLabel.textColor = Theme.textSecondary
+        voicePickerLabel.translatesAutoresizingMaskIntoConstraints = false
+        voicePickerLabel.isHidden = true
+        voicePickerLabel.tag = 900
+        addSubview(voicePickerLabel)
+
+        voicePopup.removeAllItems()
+        voicePopup.addItem(withTitle: "Click \"Fetch\" to load voices")
+        voicePopup.lastItem?.isEnabled = false
+        voicePopup.addItem(withTitle: "Custom Voice ID")
+        voicePopup.lastItem?.representedObject = "__custom__"
+        voicePopup.target = self
+        voicePopup.action = #selector(voicePickerChanged)
+        voicePopup.isHidden = true
+        voicePopup.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(voicePopup)
+
+        let fetchButton = NSButton(title: "Fetch", target: self, action: #selector(fetchVoicesClicked))
+        fetchButton.bezelStyle = .rounded
+        fetchButton.controlSize = .small
+        fetchButton.font = .systemFont(ofSize: 11)
+        fetchButton.isHidden = true
+        fetchButton.tag = 901
+        fetchButton.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(fetchButton)
+
+        customVoiceLabel.font = .systemFont(ofSize: 12)
+        customVoiceLabel.textColor = Theme.textSecondary
+        customVoiceLabel.isHidden = true
+        customVoiceLabel.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(customVoiceLabel)
+
+        customVoiceField.placeholderString = "Enter voice ID"
+        customVoiceField.stringValue = Settings.shared.elevenLabsCustomVoiceId
+        customVoiceField.isHidden = true
+        customVoiceField.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(customVoiceField)
+
+        voiceWarningLabel.font = .systemFont(ofSize: 11)
+        voiceWarningLabel.textColor = .systemOrange
+        voiceWarningLabel.isHidden = true
+        voiceWarningLabel.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(voiceWarningLabel)
+
         // Buttons
         exportVideoButton.title = "Export Video"
         exportVideoButton.bezelStyle = .rounded
+        exportVideoButton.keyEquivalent = "\r"
         exportVideoButton.target = self
         exportVideoButton.action = #selector(exportVideoClicked)
         exportVideoButton.translatesAutoresizingMaskIntoConstraints = false
@@ -85,12 +173,30 @@ class ExportSheetView: NSView {
 
         cancelButton.title = "Cancel"
         cancelButton.bezelStyle = .rounded
+        cancelButton.keyEquivalent = "\u{1b}"
         cancelButton.target = self
         cancelButton.action = #selector(cancelClicked)
         cancelButton.translatesAutoresizingMaskIntoConstraints = false
         addSubview(cancelButton)
 
-        // Progress
+        // Track all option views for batch hide/show
+        optionViews = [
+            formatLabel, formatPopup,
+            qualityLabel, qualityPopup,
+            speedLabel, speedPopup,
+            voiceLabel, voiceControl, voicePickerLabel, voicePopup, fetchButton,
+            customVoiceLabel, customVoiceField, voiceWarningLabel,
+            exportVideoButton, exportSRTButton, cancelButton,
+        ]
+
+        // -- Progress views (hidden initially) --
+        statusLabel.font = .systemFont(ofSize: 14, weight: .medium)
+        statusLabel.textColor = Theme.textPrimary
+        statusLabel.alignment = .center
+        statusLabel.isHidden = true
+        statusLabel.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(statusLabel)
+
         progressIndicator.style = .bar
         progressIndicator.isIndeterminate = false
         progressIndicator.minValue = 0
@@ -99,13 +205,36 @@ class ExportSheetView: NSView {
         progressIndicator.translatesAutoresizingMaskIntoConstraints = false
         addSubview(progressIndicator)
 
-        progressLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
-        progressLabel.textColor = Theme.textTertiary
-        progressLabel.isHidden = true
-        progressLabel.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(progressLabel)
+        percentLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        percentLabel.textColor = Theme.textTertiary
+        percentLabel.alignment = .center
+        percentLabel.isHidden = true
+        percentLabel.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(percentLabel)
+
+        errorLabel.font = .systemFont(ofSize: 12)
+        errorLabel.textColor = .systemRed
+        errorLabel.alignment = .center
+        errorLabel.preferredMaxLayoutWidth = 360
+        errorLabel.isHidden = true
+        errorLabel.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(errorLabel)
+
+        dismissButton.title = "Close"
+        dismissButton.bezelStyle = .rounded
+        dismissButton.target = self
+        dismissButton.action = #selector(dismissClicked)
+        dismissButton.isHidden = true
+        dismissButton.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(dismissButton)
+
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(settingsDidChange),
+            name: .settingsChanged, object: nil
+        )
 
         NSLayoutConstraint.activate([
+            // Options layout
             formatLabel.topAnchor.constraint(equalTo: topAnchor, constant: 24),
             formatLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
             formatPopup.centerYAnchor.constraint(equalTo: formatLabel.centerYAnchor),
@@ -121,12 +250,31 @@ class ExportSheetView: NSView {
             speedPopup.centerYAnchor.constraint(equalTo: speedLabel.centerYAnchor),
             speedPopup.leadingAnchor.constraint(equalTo: speedLabel.trailingAnchor, constant: 8),
 
-            progressIndicator.topAnchor.constraint(equalTo: speedLabel.bottomAnchor, constant: 20),
-            progressIndicator.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
-            progressIndicator.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
+            voiceLabel.topAnchor.constraint(equalTo: speedLabel.bottomAnchor, constant: 20),
+            voiceLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
 
-            progressLabel.topAnchor.constraint(equalTo: progressIndicator.bottomAnchor, constant: 4),
-            progressLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
+            voiceControl.topAnchor.constraint(equalTo: voiceLabel.bottomAnchor, constant: 8),
+            voiceControl.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
+
+            voicePickerLabel.topAnchor.constraint(equalTo: voiceControl.bottomAnchor, constant: 10),
+            voicePickerLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
+
+            voicePopup.centerYAnchor.constraint(equalTo: voicePickerLabel.centerYAnchor),
+            voicePopup.leadingAnchor.constraint(equalTo: voicePickerLabel.trailingAnchor, constant: 8),
+            voicePopup.widthAnchor.constraint(equalToConstant: 200),
+
+            fetchButton.centerYAnchor.constraint(equalTo: voicePopup.centerYAnchor),
+            fetchButton.leadingAnchor.constraint(equalTo: voicePopup.trailingAnchor, constant: 6),
+
+            customVoiceLabel.topAnchor.constraint(equalTo: voicePopup.bottomAnchor, constant: 8),
+            customVoiceLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
+
+            customVoiceField.centerYAnchor.constraint(equalTo: customVoiceLabel.centerYAnchor),
+            customVoiceField.leadingAnchor.constraint(equalTo: customVoiceLabel.trailingAnchor, constant: 8),
+            customVoiceField.widthAnchor.constraint(equalToConstant: 220),
+
+            voiceWarningLabel.topAnchor.constraint(equalTo: customVoiceLabel.bottomAnchor, constant: 6),
+            voiceWarningLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
 
             cancelButton.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -20),
             cancelButton.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
@@ -136,20 +284,188 @@ class ExportSheetView: NSView {
 
             exportVideoButton.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -20),
             exportVideoButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
+
+            // Progress layout (centered in sheet)
+            statusLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
+            statusLabel.topAnchor.constraint(equalTo: topAnchor, constant: 48),
+            statusLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
+            statusLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
+
+            progressIndicator.topAnchor.constraint(equalTo: statusLabel.bottomAnchor, constant: 20),
+            progressIndicator.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 40),
+            progressIndicator.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -40),
+
+            percentLabel.topAnchor.constraint(equalTo: progressIndicator.bottomAnchor, constant: 8),
+            percentLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
+
+            errorLabel.topAnchor.constraint(equalTo: percentLabel.bottomAnchor, constant: 16),
+            errorLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
+            errorLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
+            errorLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
+
+            dismissButton.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -20),
+            dismissButton.centerXAnchor.constraint(equalTo: centerXAnchor),
         ])
     }
 
-    func updateProgress(_ percent: Double) {
+    // MARK: - Progress Mode
+
+    /// Switch to progress mode: hide options, show progress bar + status.
+    func showProgressMode(status: String) {
+        for view in optionViews { view.isHidden = true }
+        statusLabel.stringValue = status
+        statusLabel.textColor = Theme.textPrimary
+        statusLabel.isHidden = false
+        progressIndicator.doubleValue = 0
         progressIndicator.isHidden = false
-        progressLabel.isHidden = false
-        progressIndicator.doubleValue = percent
-        progressLabel.stringValue = "\(Int(percent))%"
+        percentLabel.stringValue = "0%"
+        percentLabel.isHidden = false
+        errorLabel.isHidden = true
+        dismissButton.isHidden = true
     }
 
-    func resetProgress() {
+    /// Update the progress bar and status text.
+    func updateProgress(_ percent: Double, status: String? = nil) {
+        progressIndicator.doubleValue = percent
+        percentLabel.stringValue = "\(Int(percent))%"
+        if let status {
+            statusLabel.stringValue = status
+        }
+    }
+
+    /// Show an error in the progress view.
+    func showError(_ message: String) {
+        statusLabel.stringValue = "Export Failed"
+        statusLabel.textColor = .systemRed
         progressIndicator.isHidden = true
-        progressLabel.isHidden = true
-        progressIndicator.doubleValue = 0
+        percentLabel.isHidden = true
+        errorLabel.stringValue = message
+        errorLabel.isHidden = false
+        dismissButton.title = "Close"
+        dismissButton.isHidden = false
+    }
+
+    /// Show success in the progress view.
+    func showComplete() {
+        statusLabel.stringValue = "Export Complete"
+        statusLabel.textColor = .systemGreen
+        progressIndicator.doubleValue = 100
+        percentLabel.stringValue = "100%"
+        dismissButton.title = "Done"
+        dismissButton.isHidden = false
+    }
+
+    // MARK: - Actions
+
+    @objc private func settingsDidChange() {
+        layer?.backgroundColor = Theme.surface2.cgColor
+    }
+
+    @objc private func voiceOptionChanged() {
+        let recreate = voiceControl.selectedSegment == 1
+        let pickerLabel = subviews.first { $0.tag == 900 }
+        let fetchBtn = subviews.first { $0.tag == 901 }
+        pickerLabel?.isHidden = !recreate
+        voicePopup.isHidden = !recreate
+        fetchBtn?.isHidden = !recreate
+
+        if recreate {
+            updateCustomVoiceVisibility()
+            updateVoiceWarning()
+            // Auto-fetch voices if we haven't yet and API key is set
+            if fetchedVoices.isEmpty && !Settings.shared.elevenLabsApiKey.isEmpty {
+                fetchVoicesClicked()
+            }
+        } else {
+            customVoiceLabel.isHidden = true
+            customVoiceField.isHidden = true
+            voiceWarningLabel.isHidden = true
+            exportVideoButton.isEnabled = true
+        }
+    }
+
+    @objc private func voicePickerChanged() {
+        updateCustomVoiceVisibility()
+    }
+
+    private func updateCustomVoiceVisibility() {
+        let isCustom = (voicePopup.selectedItem?.representedObject as? String) == "__custom__"
+        customVoiceLabel.isHidden = !isCustom
+        customVoiceField.isHidden = !isCustom
+    }
+
+    private func updateVoiceWarning() {
+        let apiKey = Settings.shared.elevenLabsApiKey
+        if apiKey.isEmpty {
+            voiceWarningLabel.stringValue = "API key not configured. Set it in Preferences."
+            voiceWarningLabel.isHidden = false
+            exportVideoButton.isEnabled = false
+        } else {
+            voiceWarningLabel.isHidden = true
+            exportVideoButton.isEnabled = true
+        }
+    }
+
+    private func selectedVoiceOption() -> ExportVoiceOption {
+        guard voiceControl.selectedSegment == 1 else {
+            return .original
+        }
+
+        if let voiceId = voicePopup.selectedItem?.representedObject as? String, voiceId != "__custom__" {
+            return .elevenLabs(voiceId: voiceId)
+        }
+
+        let customId = customVoiceField.stringValue.trimmingCharacters(in: .whitespaces)
+        if !customId.isEmpty {
+            return .elevenLabs(voiceId: customId)
+        }
+
+        let settingsCustomId = Settings.shared.elevenLabsCustomVoiceId.trimmingCharacters(in: .whitespaces)
+        if !settingsCustomId.isEmpty {
+            return .elevenLabs(voiceId: settingsCustomId)
+        }
+
+        return .original
+    }
+
+    @objc private func fetchVoicesClicked() {
+        let apiKey = Settings.shared.elevenLabsApiKey
+        guard !apiKey.isEmpty else {
+            voiceWarningLabel.stringValue = "API key not configured. Set it in Preferences."
+            voiceWarningLabel.isHidden = false
+            return
+        }
+
+        let fetchBtn = subviews.first { $0.tag == 901 } as? NSButton
+        fetchBtn?.isEnabled = false
+        fetchBtn?.title = "Loading..."
+
+        Task {
+            do {
+                let voices = try await elevenLabsService.listVoices(apiKey: apiKey)
+                await MainActor.run {
+                    self.fetchedVoices = voices
+                    self.voicePopup.removeAllItems()
+                    for voice in voices {
+                        let label = voice.category.isEmpty ? voice.name : "\(voice.name) (\(voice.category))"
+                        self.voicePopup.addItem(withTitle: label)
+                        self.voicePopup.lastItem?.representedObject = voice.id
+                    }
+                    self.voicePopup.addItem(withTitle: "Custom Voice ID")
+                    self.voicePopup.lastItem?.representedObject = "__custom__"
+                    fetchBtn?.title = "Fetch"
+                    fetchBtn?.isEnabled = true
+                    self.voiceWarningLabel.isHidden = true
+                }
+            } catch {
+                await MainActor.run {
+                    self.voiceWarningLabel.stringValue = "Failed to fetch voices: \(error.localizedDescription)"
+                    self.voiceWarningLabel.isHidden = false
+                    fetchBtn?.title = "Retry"
+                    fetchBtn?.isEnabled = true
+                }
+            }
+        }
     }
 
     @objc private func exportVideoClicked() {
@@ -160,8 +476,9 @@ class ExportSheetView: NSView {
         let format = formats[formatPopup.indexOfSelectedItem]
         let quality = qualities[qualityPopup.indexOfSelectedItem]
         let speed = speeds[speedPopup.indexOfSelectedItem]
+        let voice = selectedVoiceOption()
 
-        onExportVideo?(format, quality, speed)
+        onExportVideo?(format, quality, speed, voice)
     }
 
     @objc private func exportSRTClicked() {
@@ -170,5 +487,9 @@ class ExportSheetView: NSView {
 
     @objc private func cancelClicked() {
         onCancel?()
+    }
+
+    @objc private func dismissClicked() {
+        onDismiss?()
     }
 }

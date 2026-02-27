@@ -17,7 +17,7 @@ class PlaybackController {
     private var allWords: [Word] = []
     private var deletedRanges: [TimeRange] = []
 
-    private static let fadeSec: Double = 0.07
+    private var fadeSec: Double { Settings.shared.crossfadeSec }
 
     init() {
         setupDisplayLink()
@@ -123,8 +123,8 @@ class PlaybackController {
         // Fade-in after a skip
         if fadeInStart > 0 {
             let elapsed = CACurrentMediaTime() - fadeInStart
-            if elapsed < Self.fadeSec {
-                player.volume = Float(elapsed / Self.fadeSec)
+            if elapsed < fadeSec {
+                player.volume = Float(elapsed / fadeSec)
             } else {
                 player.volume = 1
                 fadeInStart = 0
@@ -135,9 +135,9 @@ class PlaybackController {
         if fadeInStart == 0 {
             if let nextStart = findNextDeletedStart(time: time, deletedRanges: deletedRanges) {
                 let dist = nextStart - time
-                if dist < Self.fadeSec && dist > 0 {
-                    player.volume = Float(dist / Self.fadeSec)
-                } else if dist >= Self.fadeSec {
+                if dist < fadeSec && dist > 0 {
+                    player.volume = Float(dist / fadeSec)
+                } else if dist >= fadeSec {
                     player.volume = 1
                 }
             }

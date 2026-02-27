@@ -36,6 +36,11 @@ class WaveformView: NSView {
         cursorView.translatesAutoresizingMaskIntoConstraints = false
         addSubview(cursorView)
 
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(settingsDidChange),
+            name: .settingsChanged, object: nil
+        )
+
         NSLayoutConstraint.activate([
             waveformImageView.topAnchor.constraint(equalTo: topAnchor),
             waveformImageView.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -98,6 +103,11 @@ class WaveformView: NSView {
 
         // Update cursor position
         cursorView.frame.origin.x = x
+    }
+
+    @objc private func settingsDidChange() {
+        layer?.backgroundColor = Theme.surface1.cgColor
+        cursorView.layer?.backgroundColor = Theme.waveformCursor.cgColor
     }
 
     // MARK: - Click to Seek

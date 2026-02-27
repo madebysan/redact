@@ -4,10 +4,12 @@
 <h1 align="center">Redact</h1>
 <p align="center">Remove unwanted words from video.<br>
 Click words in the transcript to delete them — Redact cuts them from the video.</p>
-<p align="center"><strong>Version 1.0.0</strong> · macOS 14+ · Apple Silicon & Intel</p>
+<p align="center"><strong>Version 1.1.0</strong> · macOS 14+ · Apple Silicon & Intel</p>
 <p align="center"><a href="https://github.com/madebysan/Redact-Swift/releases/latest"><strong>Download Redact</strong></a></p>
 
 ---
+
+<!-- Screenshot placeholder — add screenshot here -->
 
 ## How it works
 
@@ -20,12 +22,16 @@ Click words in the transcript to delete them — Redact cuts them from the video
 ## Features
 
 - Word-level transcript editing with click, drag, shift-click, and cmd-click selection
-- Real-time preview — plays through edits with 70ms audio crossfades
+- Real-time preview — plays through edits with configurable audio crossfades
 - Waveform visualization with click-to-seek
 - Unlimited undo/redo
 - Export to MP4, MKV, or WebM with quality and speed options
 - Export SRT subtitles (timestamps adjusted for deletions)
 - Save/load `.rdt` project files
+- Dark, Light, and System theme support
+- Customizable transcript font, size, and highlight color
+- ElevenLabs voice integration for TTS export
+- Whisper model selection (download and manage models from Preferences)
 - Native macOS app — no Electron, no browser
 
 ## Prerequisites
@@ -76,6 +82,7 @@ Redact looks for a venv at `~/Projects/redact/.venv` and `~/Projects/Redact-Swif
 | Play / Pause | Space |
 | Skip back 5s | Left arrow |
 | Skip forward 5s | Right arrow |
+| Preferences | Cmd+, |
 
 ## Building from source
 

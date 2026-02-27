@@ -4,12 +4,46 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var mainWindowController: MainWindowController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.appearance = NSAppearance(named: .darkAqua)
+        // Without a proper .app bundle (e.g. swift run), macOS treats the
+        // process as a background tool — no dock icon, no key event focus.
+        // This tells macOS to treat it as a regular app.
+        NSApp.setActivationPolicy(.regular)
+
+        // Set dock icon from .icns (with 5% padding to reduce visual size)
+        var rawIcon: NSImage?
+        if let icon = Bundle.main.image(forResource: "icon") {
+            rawIcon = icon
+        } else {
+            let candidates = [
+                NSHomeDirectory() + "/Projects/Redact-Swift/Sources/Resources/icon.icns",
+                NSHomeDirectory() + "/Projects/Redact-Swift/assets/icon.icns",
+            ]
+            for path in candidates {
+                if let icon = NSImage(contentsOfFile: path) {
+                    rawIcon = icon
+                    break
+                }
+            }
+        }
+        if let rawIcon {
+            let size = NSSize(width: 1024, height: 1024)
+            let scale: CGFloat = 0.90
+            let inset = size.width * (1 - scale) / 2
+            let paddedIcon = NSImage(size: size)
+            paddedIcon.lockFocus()
+            rawIcon.draw(in: NSRect(x: inset, y: inset, width: size.width * scale, height: size.height * scale))
+            paddedIcon.unlockFocus()
+            NSApp.applicationIconImage = paddedIcon
+        }
+
+        Settings.shared.applyAppearance()
 
         setupMenuBar()
 
         mainWindowController = MainWindowController()
         mainWindowController?.showWindow(nil)
+        mainWindowController?.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -18,6 +52,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool {
         true
+    }
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        guard let url = urls.first else { return }
+        mainWindowController?.handleImportedFile(url)
     }
 
     // MARK: - Menu Bar
@@ -29,6 +68,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let appMenuItem = NSMenuItem()
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "About Redact", action: #selector(showAboutWindow), keyEquivalent: "")
+        appMenu.addItem(withTitle: "Preferences…", action: #selector(showPreferences), keyEquivalent: ",")
         appMenu.addItem(NSMenuItem.separator())
         appMenu.addItem(withTitle: "Hide Redact", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
         let hideOthersItem = NSMenuItem(title: "Hide Others", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h")
@@ -44,6 +84,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let fileMenuItem = NSMenuItem()
         let fileMenu = NSMenu(title: "File")
         fileMenu.addItem(withTitle: "Import Media…", action: #selector(MainWindowController.importMedia(_:)), keyEquivalent: "o")
+        let closeProjectItem = NSMenuItem(title: "Close Project", action: #selector(MainWindowController.closeProject(_:)), keyEquivalent: "w")
+        closeProjectItem.keyEquivalentModifierMask = [.command, .shift]
+        fileMenu.addItem(closeProjectItem)
         fileMenu.addItem(NSMenuItem.separator())
         let saveItem = NSMenuItem(title: "Save Project", action: #selector(MainWindowController.saveProject(_:)), keyEquivalent: "s")
         fileMenu.addItem(saveItem)
@@ -65,7 +108,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         redoItem.keyEquivalentModifierMask = [.command, .shift]
         editMenu.addItem(redoItem)
         editMenu.addItem(NSMenuItem.separator())
-        editMenu.addItem(withTitle: "Delete Selected", action: #selector(MainWindowController.deleteSelected(_:)), keyEquivalent: "\u{08}")
+        let deleteItem = NSMenuItem(title: "Delete Selected", action: #selector(MainWindowController.deleteSelected(_:)), keyEquivalent: "\u{08}")
+        deleteItem.keyEquivalentModifierMask = []
+        editMenu.addItem(deleteItem)
         editMenu.addItem(withTitle: "Select All", action: #selector(MainWindowController.selectAllWords(_:)), keyEquivalent: "a")
         editMenuItem.submenu = editMenu
         mainMenu.addItem(editMenuItem)
@@ -73,7 +118,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Playback menu
         let playbackMenuItem = NSMenuItem()
         let playbackMenu = NSMenu(title: "Playback")
-        playbackMenu.addItem(withTitle: "Play / Pause", action: #selector(MainWindowController.togglePlayPause(_:)), keyEquivalent: " ")
+        let playPauseItem = NSMenuItem(title: "Play / Pause", action: #selector(MainWindowController.togglePlayPause(_:)), keyEquivalent: " ")
+        playPauseItem.keyEquivalentModifierMask = []
+        playbackMenu.addItem(playPauseItem)
         playbackMenu.addItem(NSMenuItem.separator())
         let skipBackItem = NSMenuItem(title: "Skip Back 5s", action: #selector(MainWindowController.skipBack(_:)), keyEquivalent: String(Character(UnicodeScalar(NSLeftArrowFunctionKey)!)))
         skipBackItem.keyEquivalentModifierMask = []
@@ -108,7 +155,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func showAboutWindow() {
         let alert = NSAlert()
         alert.messageText = "Redact"
-        alert.informativeText = "Remove unwanted words from video.\nVersion 1.0.0"
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
+        alert.informativeText = "Remove unwanted words from video.\nVersion \(version)"
         alert.alertStyle = .informational
 
         // Add "Made by santiagoalonso.com" as an accessory view
@@ -136,11 +184,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         creditButton.attributedTitle = attrString
         alert.accessoryView = creditButton
 
-        if let icon = NSImage(named: "AppIcon") {
-            alert.icon = icon
-        }
+        alert.icon = NSApp.applicationIconImage
 
         alert.runModal()
+    }
+
+    @objc func showPreferences() {
+        SettingsWindowController.show()
     }
 
     @objc func openWebsite() {
