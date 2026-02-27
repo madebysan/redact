@@ -1,140 +1,120 @@
 import Foundation
+import WhisperKit
+import AVFoundation
 
-/// Whisper transcription subprocess wrapper.
-/// Spawns python3 with whisper-transcribe.py, parses progress from stderr, collects JSON from stdout.
+/// Native WhisperKit transcription service.
+/// Uses CoreML + Metal for on-device speech recognition — no Python required.
 class WhisperService {
-    private var currentProcess: Process?
+    private var isCancelled = false
 
-    /// Transcribe an audio file using Whisper.
+    /// Transcribe an audio file using WhisperKit.
     func transcribe(
         audioPath: String,
         model: String? = nil,
         onProgress: @escaping (TranscribeProgress) -> Void
     ) async throws -> RawTranscript {
-        let model = model ?? Settings.shared.whisperModel
-        // Find Python — prefer venv, fall back to system
-        let pythonPath: String
-        if let venv = PathUtilities.findVenv() {
-            pythonPath = venv + "/bin/python3"
-        } else if let system = PathUtilities.findPython3() {
-            pythonPath = system
-        } else {
-            throw WhisperError.pythonNotFound
+        isCancelled = false
+        let modelVariant = model ?? Settings.shared.whisperModel
+
+        // Get audio duration for progress estimation
+        let audioURL = URL(fileURLWithPath: audioPath)
+        let asset = AVURLAsset(url: audioURL)
+        let audioDuration = try await asset.load(.duration).seconds
+
+        // Initialize WhisperKit — auto-downloads model on first use
+        onProgress(TranscribeProgress(status: .loadingModel, message: "Loading model…"))
+
+        let whisperKit: WhisperKit
+        do {
+            let config = WhisperKitConfig(
+                model: modelVariant,
+                verbose: false,
+                prewarm: false,
+                load: true,
+                download: true
+            )
+            whisperKit = try await WhisperKit(config)
+        } catch {
+            throw WhisperError.modelLoadFailed(error.localizedDescription)
         }
 
-        // Find the whisper script — bundled in app resources
-        let scriptPath: String
-        if let bundled = Bundle.main.path(forResource: "whisper-transcribe", ofType: "py") {
-            scriptPath = bundled
-        } else {
-            // Fallback: check known locations
-            let candidates = [
-                NSHomeDirectory() + "/Projects/redact/scripts/whisper-transcribe.py",
-            ]
-            scriptPath = candidates.first { FileManager.default.fileExists(atPath: $0) }
-                ?? "whisper-transcribe.py"
+        guard !isCancelled else { throw WhisperError.cancelled }
+
+        // Configure decoding with word-level timestamps
+        let options = DecodingOptions(
+            wordTimestamps: true,
+            chunkingStrategy: .vad
+        )
+
+        onProgress(TranscribeProgress(status: .transcribing, progress: 0, message: "Transcribing…"))
+
+        // Transcribe with progress callback
+        let totalWindows = max(1, Int(ceil(audioDuration / 30.0)))
+
+        let results = try await whisperKit.transcribe(
+            audioPath: audioPath,
+            decodeOptions: options,
+            callback: { [weak self] progress in
+                guard let self else { return false }
+                if self.isCancelled { return false }
+
+                // Estimate percentage from window index
+                let percent = min(99, Int(Double(progress.windowId + 1) / Double(totalWindows) * 100))
+                onProgress(TranscribeProgress(
+                    status: .transcribing,
+                    progress: percent,
+                    message: "Transcribing… \(percent)%"
+                ))
+                return true
+            }
+        )
+
+        guard !isCancelled else { throw WhisperError.cancelled }
+
+        guard !results.isEmpty else {
+            throw WhisperError.transcriptionFailed("No transcription results returned")
         }
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: pythonPath)
-        process.arguments = ["--file", audioPath, "--model", model]
+        onProgress(TranscribeProgress(status: .complete, message: "Transcription complete"))
 
-        // If using venv python, the script is passed as first arg
-        process.arguments = [scriptPath, "--file", audioPath, "--model", model]
-
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
-
-        currentProcess = process
-
-        return try await withCheckedThrowingContinuation { continuation in
-            var stdoutData = Data()
-
-            // Read stderr for progress updates
-            stderrPipe.fileHandleForReading.readabilityHandler = { handle in
-                let data = handle.availableData
-                guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
-
-                // Parse progress messages line by line
-                for line in text.split(separator: "\n") {
-                    let msg = String(line).trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !msg.isEmpty else { continue }
-
-                    if msg.contains("Loading model") {
-                        onProgress(TranscribeProgress(status: .loadingModel, message: msg))
-                    } else if msg.contains("Transcribing") {
-                        onProgress(TranscribeProgress(status: .transcribing, message: msg))
-                    } else if msg.contains("Refining") {
-                        onProgress(TranscribeProgress(status: .refining, message: msg))
-                    } else if msg.contains("complete") {
-                        onProgress(TranscribeProgress(status: .complete, message: msg))
-                    } else if let percentRange = msg.range(of: "\\d+%", options: .regularExpression) {
-                        let percentStr = msg[percentRange].dropLast() // Remove %
-                        let percent = Int(percentStr) ?? 0
-                        onProgress(TranscribeProgress(status: .transcribing, progress: percent, message: msg))
-                    }
-                }
-            }
-
-            // Collect stdout
-            stdoutPipe.fileHandleForReading.readabilityHandler = { handle in
-                let data = handle.availableData
-                if !data.isEmpty {
-                    stdoutData.append(data)
-                }
-            }
-
-            process.terminationHandler = { [weak self] proc in
-                stderrPipe.fileHandleForReading.readabilityHandler = nil
-                stdoutPipe.fileHandleForReading.readabilityHandler = nil
-                self?.currentProcess = nil
-
-                if proc.terminationStatus == 15 || proc.terminationStatus == 9 {
-                    continuation.resume(throwing: WhisperError.cancelled)
-                    return
-                }
-
-                if proc.terminationStatus != 0 {
-                    continuation.resume(throwing: WhisperError.transcriptionFailed(proc.terminationStatus))
-                    return
-                }
-
-                // Parse JSON from stdout — find first '{' to skip any preamble
-                let output = String(data: stdoutData, encoding: .utf8) ?? ""
-                guard let jsonStart = output.firstIndex(of: "{") else {
-                    continuation.resume(throwing: WhisperError.invalidOutput)
-                    return
-                }
-
-                let jsonStr = String(output[jsonStart...])
-                guard let jsonData = jsonStr.data(using: .utf8) else {
-                    continuation.resume(throwing: WhisperError.invalidOutput)
-                    return
-                }
-
-                do {
-                    let transcript = try JSONDecoder().decode(RawTranscript.self, from: jsonData)
-                    continuation.resume(returning: transcript)
-                } catch {
-                    continuation.resume(throwing: WhisperError.parseFailed(error.localizedDescription))
-                }
-            }
-
-            do {
-                try process.run()
-            } catch {
-                currentProcess = nil
-                continuation.resume(throwing: WhisperError.launchFailed(error.localizedDescription))
-            }
-        }
+        // Map WhisperKit results → RawTranscript
+        return mapToRawTranscript(results: results, duration: audioDuration)
     }
 
     /// Cancel the running transcription.
     func cancel() {
-        currentProcess?.terminate()
-        currentProcess = nil
+        isCancelled = true
+    }
+
+    // MARK: - Result Mapping
+
+    /// Convert WhisperKit TranscriptionResult array → RawTranscript.
+    private func mapToRawTranscript(results: [TranscriptionResult], duration: Double) -> RawTranscript {
+        var segmentId = 0
+        var detectedLanguage = "en"
+
+        let segments: [RawSegment] = results.flatMap { result -> [RawSegment] in
+            detectedLanguage = result.language
+
+            return result.segments.compactMap { segment -> RawSegment? in
+                guard let wordTimings = segment.words, !wordTimings.isEmpty else { return nil }
+
+                let words: [RawWord] = wordTimings.map { timing in
+                    RawWord(
+                        word: timing.word,
+                        start: Double(timing.start),
+                        end: Double(timing.end),
+                        confidence: Double(timing.probability)
+                    )
+                }
+
+                let seg = RawSegment(id: segmentId, words: words)
+                segmentId += 1
+                return seg
+            }
+        }
+
+        return RawTranscript(segments: segments, language: detectedLanguage, duration: duration)
     }
 }
 
@@ -142,9 +122,9 @@ enum WhisperError: LocalizedError, Equatable {
     static func == (lhs: WhisperError, rhs: WhisperError) -> Bool {
         switch (lhs, rhs) {
         case (.cancelled, .cancelled): return true
-        case (.pythonNotFound, .pythonNotFound): return true
-        case (.scriptNotFound, .scriptNotFound): return true
         case (.invalidOutput, .invalidOutput): return true
+        case (.modelLoadFailed, .modelLoadFailed): return true
+        case (.modelDownloadFailed, .modelDownloadFailed): return true
         default: return false
         }
     }
@@ -154,30 +134,24 @@ enum WhisperError: LocalizedError, Equatable {
         return false
     }
 
-    case pythonNotFound
-    case scriptNotFound
-    case launchFailed(String)
-    case transcriptionFailed(Int32)
+    case modelLoadFailed(String)
+    case modelDownloadFailed(String)
+    case transcriptionFailed(String)
     case cancelled
     case invalidOutput
-    case parseFailed(String)
 
     var errorDescription: String? {
         switch self {
-        case .pythonNotFound:
-            return "Python 3 not found. Install it via Homebrew: brew install python3"
-        case .scriptNotFound:
-            return "Whisper transcription script not found"
-        case .launchFailed(let msg):
-            return "Failed to launch transcription: \(msg)"
-        case .transcriptionFailed(let code):
-            return "Transcription failed (exit code \(code))"
+        case .modelLoadFailed(let msg):
+            return "Failed to load transcription model: \(msg)"
+        case .modelDownloadFailed(let msg):
+            return "Failed to download transcription model: \(msg)"
+        case .transcriptionFailed(let msg):
+            return "Transcription failed: \(msg)"
         case .cancelled:
             return "Transcription cancelled"
         case .invalidOutput:
             return "Transcription produced invalid output"
-        case .parseFailed(let msg):
-            return "Failed to parse transcript: \(msg)"
         }
     }
 }

@@ -6,12 +6,14 @@ let package = Package(
     platforms: [.macOS(.v14)],
     dependencies: [
         .package(url: "https://github.com/dmrschmidt/DSWaveformImage.git", from: "14.0.0"),
+        .package(url: "https://github.com/argmaxinc/WhisperKit.git", from: "0.9.0"),
     ],
     targets: [
         .executableTarget(
             name: "Redact",
             dependencies: [
                 .product(name: "DSWaveformImage", package: "DSWaveformImage"),
+                .product(name: "WhisperKit", package: "WhisperKit"),
             ],
             path: "Sources",
             exclude: [
@@ -20,7 +22,6 @@ let package = Package(
             ],
             resources: [
                 .copy("Resources/icon.icns"),
-                .copy("Resources/whisper-transcribe.py"),
             ]
         ),
         .testTarget(

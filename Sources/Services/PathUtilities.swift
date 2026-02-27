@@ -42,39 +42,6 @@ enum PathUtilities {
         return findInPath("ffprobe")
     }
 
-    /// Find python3 binary.
-    static func findPython3() -> String? {
-        let candidates = [
-            "/opt/homebrew/bin/python3",
-            "/usr/local/bin/python3",
-            "/usr/bin/python3",
-        ]
-
-        for path in candidates {
-            if FileManager.default.isExecutableFile(atPath: path) {
-                return path
-            }
-        }
-
-        return findInPath("python3")
-    }
-
-    /// Find the Python venv from the Electron project (reuse existing packages).
-    static func findVenv() -> String? {
-        let candidates = [
-            NSHomeDirectory() + "/Projects/redact/.venv",
-        ]
-
-        for path in candidates {
-            let pythonPath = path + "/bin/python3"
-            if FileManager.default.isExecutableFile(atPath: pythonPath) {
-                return path
-            }
-        }
-
-        return nil
-    }
-
     /// Clean up temp directory.
     static func cleanTempDir() {
         try? FileManager.default.removeItem(atPath: tempDir)

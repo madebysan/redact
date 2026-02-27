@@ -4,17 +4,19 @@
 <h1 align="center">Redact</h1>
 <p align="center">Remove unwanted words from video.<br>
 Click words in the transcript to delete them — Redact cuts them from the video.</p>
-<p align="center"><strong>Version 1.1.0</strong> · macOS 14+ · Apple Silicon & Intel</p>
+<p align="center"><strong>Version 1.2.0</strong> · macOS 14+ · Apple Silicon & Intel</p>
 <p align="center"><a href="https://github.com/madebysan/redact/releases/latest"><strong>Download Redact</strong></a></p>
 
 ---
 
-<!-- Screenshot placeholder — add screenshot here -->
+<p align="center">
+  <img src="assets/screenshot.png" width="720" alt="Redact app screenshot showing video preview, word-level transcript editing, and preferences panel">
+</p>
 
 ## How it works
 
 1. **Import** a video or audio file (MP4, MKV, WebM, MOV, AVI, MP3, WAV, M4A)
-2. **Transcription** runs automatically via [faster-whisper](https://github.com/SYSTRAN/faster-whisper) — word-level timestamps
+2. **Transcription** runs automatically via [WhisperKit](https://github.com/argmaxinc/WhisperKit) — on-device, word-level timestamps
 3. **Click words** to select, then press Delete to mark them for removal
 4. **Play** — deleted sections are skipped in real-time with smooth audio fades
 5. **Export** — FFmpeg renders the final video with deleted sections cut out
@@ -23,6 +25,7 @@ Click words in the transcript to delete them — Redact cuts them from the video
 
 - Word-level transcript editing with click, drag, shift-click, and cmd-click selection
 - Real-time preview — plays through edits with configurable audio crossfades
+- On-device transcription via WhisperKit (CoreML + Metal) — no Python, no cloud
 - Waveform visualization with click-to-seek
 - Unlimited undo/redo
 - Export to MP4, MKV, or WebM with quality and speed options
@@ -31,12 +34,10 @@ Click words in the transcript to delete them — Redact cuts them from the video
 - Dark, Light, and System theme support
 - Customizable transcript font, size, and highlight color
 - ElevenLabs voice integration for TTS export
-- Whisper model selection (download and manage models from Preferences)
+- Whisper model selection with English-only and turbo variants
 - Native macOS app — no Electron, no browser
 
 ## Prerequisites
-
-Redact uses external tools for transcription and video processing. Install them before first use:
 
 ### FFmpeg (required)
 
@@ -44,22 +45,7 @@ Redact uses external tools for transcription and video processing. Install them 
 brew install ffmpeg
 ```
 
-### Python 3 + faster-whisper (required for transcription)
-
-```bash
-brew install python3
-pip3 install faster-whisper
-```
-
-Or use a virtual environment:
-
-```bash
-python3 -m venv ~/.venv/whisper
-source ~/.venv/whisper/bin/activate
-pip install faster-whisper
-```
-
-Redact looks for a venv at `~/Projects/redact/.venv`, or falls back to system Python.
+That's it. Transcription is fully built-in — WhisperKit downloads the selected model automatically on first use.
 
 ## Install
 
@@ -93,21 +79,13 @@ swift build
 swift run Redact
 ```
 
-Release build:
-
-```bash
-./scripts/build-release.sh          # Build unsigned .app
-./scripts/build-release.sh sign      # Build + code sign
-./scripts/build-release.sh release   # Build + sign + notarize + DMG
-```
-
 ## Tech stack
 
 - **Swift + AppKit** — native macOS UI
 - **AVFoundation** — video playback with CVDisplayLink-driven 60fps sync
-- **DSWaveformImage** — waveform visualization (only external dependency)
+- **WhisperKit** — on-device speech-to-text via CoreML + Metal
+- **DSWaveformImage** — waveform visualization
 - **FFmpeg** (subprocess) — audio extraction and video export
-- **faster-whisper** (Python subprocess) — speech-to-text with word timestamps
 
 ## License
 

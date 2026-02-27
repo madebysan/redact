@@ -99,15 +99,37 @@ class Settings {
     }
 
     static let availableModels: [WhisperModelInfo] = [
-        WhisperModelInfo(id: "tiny", label: "Tiny", size: "~75 MB"),
-        WhisperModelInfo(id: "base", label: "Base", size: "~145 MB"),
-        WhisperModelInfo(id: "small", label: "Small", size: "~465 MB"),
-        WhisperModelInfo(id: "medium", label: "Medium", size: "~1.5 GB"),
-        WhisperModelInfo(id: "large-v3", label: "Large v3", size: "~3 GB"),
+        WhisperModelInfo(id: "openai_whisper-tiny", label: "Tiny", size: "~40 MB"),
+        WhisperModelInfo(id: "openai_whisper-tiny.en", label: "Tiny (English)", size: "~40 MB"),
+        WhisperModelInfo(id: "openai_whisper-base", label: "Base", size: "~80 MB"),
+        WhisperModelInfo(id: "openai_whisper-base.en", label: "Base (English)", size: "~80 MB"),
+        WhisperModelInfo(id: "openai_whisper-small", label: "Small", size: "~250 MB"),
+        WhisperModelInfo(id: "openai_whisper-small.en", label: "Small (English)", size: "~250 MB"),
+        WhisperModelInfo(id: "openai_whisper-medium", label: "Medium", size: "~800 MB"),
+        WhisperModelInfo(id: "openai_whisper-medium.en", label: "Medium (English)", size: "~800 MB"),
+        WhisperModelInfo(id: "openai_whisper-large-v3", label: "Large v3", size: "~1.6 GB"),
+        WhisperModelInfo(id: "openai_whisper-large-v3-turbo", label: "Large v3 Turbo", size: "~900 MB"),
+    ]
+
+    /// Map legacy model IDs (from faster-whisper era) to WhisperKit variant names.
+    private static let legacyModelMap: [String: String] = [
+        "tiny": "openai_whisper-tiny",
+        "base": "openai_whisper-base",
+        "small": "openai_whisper-small",
+        "medium": "openai_whisper-medium",
+        "large-v3": "openai_whisper-large-v3",
     ]
 
     var whisperModel: String {
-        get { defaults.string(forKey: Key.whisperModel) ?? "small" }
+        get {
+            let stored = defaults.string(forKey: Key.whisperModel) ?? "openai_whisper-small"
+            // Migrate legacy model IDs from the Python/faster-whisper era
+            if let mapped = Self.legacyModelMap[stored] {
+                defaults.set(mapped, forKey: Key.whisperModel)
+                return mapped
+            }
+            return stored
+        }
         set {
             defaults.set(newValue, forKey: Key.whisperModel)
             notifyChanged()
