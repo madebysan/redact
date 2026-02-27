@@ -1,4 +1,5 @@
 import AppKit
+import WhisperKit
 
 /// Preferences window with card-based layout grouped into rounded-rect sections.
 class SettingsWindowController: NSWindowController {
@@ -575,10 +576,19 @@ private class SettingsContentView: NSView {
 
     private func checkModelAvailability() {
         let modelId = Settings.shared.whisperModel
-        let cacheDir = NSHomeDirectory() + "/.cache/huggingface/hub"
-        let modelDir = cacheDir + "/models--Systran--faster-whisper-\(modelId)"
 
-        isModelDownloaded = FileManager.default.fileExists(atPath: modelDir)
+        // WhisperKit stores models under Documents/huggingface/ or Application Support/huggingface/
+        let possibleBases = [
+            FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first,
+            FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first,
+        ].compactMap { $0 }
+
+        isModelDownloaded = possibleBases.contains { base in
+            let modelDir = base
+                .appendingPathComponent("huggingface/models/argmaxinc/whisperkit-coreml")
+                .appendingPathComponent(modelId)
+            return FileManager.default.fileExists(atPath: modelDir.path)
+        }
 
         if isModelDownloaded {
             modelStatusLabel.stringValue = "Ready to use"
@@ -586,7 +596,7 @@ private class SettingsContentView: NSView {
             modelActionButton.title = "Ready"
             modelActionButton.isEnabled = false
         } else {
-            modelStatusLabel.stringValue = "Not downloaded yet"
+            modelStatusLabel.stringValue = "Will download on first use"
             modelStatusLabel.textColor = .secondaryLabelColor
             modelActionButton.title = "Download"
             modelActionButton.isEnabled = true
@@ -654,44 +664,31 @@ private class SettingsContentView: NSView {
         let modelId = Settings.shared.whisperModel
         modelActionButton.title = "Downloading…"
         modelActionButton.isEnabled = false
-        modelStatusLabel.stringValue = "Downloading model…"
+        modelStatusLabel.stringValue = "Downloading model… 0%"
         modelStatusLabel.textColor = .secondaryLabelColor
 
-        // Download by running: python3 -c "from faster_whisper import WhisperModel; WhisperModel('modelId')"
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let pythonPath: String
-            if let venv = PathUtilities.findVenv() {
-                pythonPath = venv + "/bin/python3"
-            } else if let system = PathUtilities.findPython3() {
-                pythonPath = system
-            } else {
-                DispatchQueue.main.async {
-                    self?.modelStatusLabel.stringValue = "Python 3 not found"
-                    self?.modelStatusLabel.textColor = .systemRed
-                    self?.modelActionButton.title = "Download"
-                    self?.modelActionButton.isEnabled = true
-                }
-                return
-            }
-
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: pythonPath)
-            process.arguments = [
-                "-c",
-                "from faster_whisper import WhisperModel; print('Downloading...'); m = WhisperModel('\(modelId)'); print('Done')",
-            ]
-            process.standardOutput = FileHandle.nullDevice
-            process.standardError = FileHandle.nullDevice
-
+        Task {
             do {
-                try process.run()
-                process.waitUntilExit()
+                let _ = try await WhisperKit.download(
+                    variant: modelId,
+                    from: "argmaxinc/whisperkit-coreml",
+                    progressCallback: { [weak self] progress in
+                        let percent = Int(progress.fractionCompleted * 100)
+                        DispatchQueue.main.async {
+                            self?.modelStatusLabel.stringValue = "Downloading model… \(percent)%"
+                        }
+                    }
+                )
+                await MainActor.run {
+                    self.checkModelAvailability()
+                }
             } catch {
-                // Download failed
-            }
-
-            DispatchQueue.main.async {
-                self?.checkModelAvailability()
+                await MainActor.run {
+                    self.modelStatusLabel.stringValue = "Download failed: \(error.localizedDescription)"
+                    self.modelStatusLabel.textColor = .systemRed
+                    self.modelActionButton.title = "Download"
+                    self.modelActionButton.isEnabled = true
+                }
             }
         }
     }
