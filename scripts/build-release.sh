@@ -98,7 +98,7 @@ if [ "${MODE}" = "release" ]; then
 
     # Submit for notarization (uses stored credentials)
     xcrun notarytool submit "${NOTARIZE_ZIP}" \
-        --keychain-profile "Redact-Notary" \
+        --keychain-profile "notarytool" \
         --wait
 
     # Staple the ticket
