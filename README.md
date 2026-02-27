@@ -87,6 +87,10 @@ swift run Redact
 - **DSWaveformImage** — waveform visualization
 - **FFmpeg** (subprocess) — audio extraction and video export
 
+## Feedback
+
+Found a bug or have a feature idea? [Open an issue](https://github.com/madebysan/redact/issues).
+
 ## License
 
 MIT License — see [LICENSE](LICENSE) for details.
