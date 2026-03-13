@@ -93,8 +93,8 @@ Found a bug or have a feature idea? [Open an issue](https://github.com/madebysan
 
 ## License
 
-MIT License — see [LICENSE](LICENSE) for details.
+[MIT](LICENSE)
 
 ---
 
-<p align="center">Made by <a href="https://santiagoalonso.com">santiagoalonso.com</a></p>
+Made by [santiagoalonso.com](https://santiagoalonso.com)
