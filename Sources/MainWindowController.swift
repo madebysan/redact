@@ -8,7 +8,6 @@ class MainWindowController: NSWindowController {
     let whisperService = WhisperService()
     let elevenLabsService = ElevenLabsService()
     let playbackController = PlaybackController()
-    let wordSelectionController = WordSelectionController()
     private var exportSheetWindow: NSWindow?
 
     convenience init() {
@@ -32,15 +31,6 @@ class MainWindowController: NSWindowController {
 
         setupToolbar()
         setupKeyMonitor()
-
-        NotificationCenter.default.addObserver(
-            self, selector: #selector(settingsDidChange),
-            name: .settingsChanged, object: nil
-        )
-    }
-
-    @objc private func settingsDidChange() {
-        window?.backgroundColor = Theme.surface0
     }
 
     // MARK: - Key Monitor
@@ -190,6 +180,11 @@ class MainWindowController: NSWindowController {
             guard let self, let sheet = self.exportSheetWindow else { return }
             self.window?.endSheet(sheet)
             self.exportSheetWindow = nil
+        }
+
+        sheetView.onCancelExport = { [weak self, weak sheetView] in
+            sheetView?.showCancelling()
+            self?.ffmpegService.cancel()
         }
 
         mainWindow.beginSheet(sheetWindow) { _ in }
@@ -375,27 +370,27 @@ class MainWindowController: NSWindowController {
         guard project.appState == .editing else { return }
         project.undo()
         playbackController.updateWords(project.allWords)
-        wordSelectionController.refreshAllWordAppearances()
+        splitViewController.transcriptView?.refreshAllWordAppearances()
     }
 
     @objc func performRedo(_ sender: Any?) {
         guard project.appState == .editing else { return }
         project.redo()
         playbackController.updateWords(project.allWords)
-        wordSelectionController.refreshAllWordAppearances()
+        splitViewController.transcriptView?.refreshAllWordAppearances()
     }
 
     @objc func deleteSelected(_ sender: Any?) {
         guard project.appState == .editing else { return }
         project.deleteSelected()
         playbackController.updateWords(project.allWords)
-        wordSelectionController.refreshAllWordAppearances()
+        splitViewController.transcriptView?.refreshAllWordAppearances()
     }
 
     @objc func selectAllWords(_ sender: Any?) {
         guard project.appState == .editing else { return }
         project.selectAll()
-        wordSelectionController.refreshAllWordAppearances()
+        splitViewController.transcriptView?.refreshAllWordAppearances()
     }
 
     @objc func togglePlayPause(_ sender: Any?) {
@@ -651,54 +646,10 @@ class MainWindowController: NSWindowController {
             self?.playbackController.seekToWord(start: time)
         }
 
-        // Wire word selection
-        wordSelectionController.project = project
-        wordSelectionController.transcriptView = splitViewController.transcriptView
-        wordSelectionController.onWordClicked = { [weak self] word in
+        // Wire word selection directly into the transcript view.
+        splitViewController.transcriptView?.project = project
+        splitViewController.transcriptView?.onWordClicked = { [weak self] word in
             self?.playbackController.seekToWord(start: word.start)
-        }
-
-        // Add mouse tracking to transcript view
-        setupTranscriptMouseTracking()
-    }
-
-    private func setupTranscriptMouseTracking() {
-        guard splitViewController.transcriptView != nil else { return }
-
-        // Use NSEvent local monitor for mouse events on the transcript
-        NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown]) { [weak self] event in
-            guard let self,
-                  let transcriptView = self.splitViewController.transcriptView,
-                  let eventWindow = event.window,
-                  eventWindow == self.window else { return event }
-
-            let locationInView = transcriptView.convert(event.locationInWindow, from: nil)
-            guard transcriptView.bounds.contains(locationInView) else { return event }
-
-            if let wordId = transcriptView.wordId(at: locationInView) {
-                if self.wordSelectionController.handleMouseDown(wordId: wordId, event: event) {
-                    return nil // Consume event
-                }
-            }
-            return event
-        }
-
-        NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDragged]) { [weak self] event in
-            guard let self,
-                  let transcriptView = self.splitViewController.transcriptView,
-                  let eventWindow = event.window,
-                  eventWindow == self.window else { return event }
-
-            let locationInView = transcriptView.convert(event.locationInWindow, from: nil)
-            if let wordId = transcriptView.wordId(at: locationInView) {
-                self.wordSelectionController.handleMouseDragged(wordId: wordId)
-            }
-            return event
-        }
-
-        NSEvent.addLocalMonitorForEvents(matching: [.leftMouseUp]) { [weak self] event in
-            self?.wordSelectionController.handleMouseUp()
-            return event
         }
     }
 

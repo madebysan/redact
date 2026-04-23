@@ -1,12 +1,12 @@
 import AppKit
 
-/// Shows transcription progress: spinner, status text, progress percentage, cancel button.
+/// Shows transcription progress: spinner, status text, cancel button.
+/// Intentionally indeterminate — see AppState.TranscribeProgress.
 class TranscribeProgressView: NSView {
     var onCancel: (() -> Void)?
 
     private let spinner = NSProgressIndicator()
     private let statusLabel = NSTextField(labelWithString: "Loading model…")
-    private let progressLabel = NSTextField(labelWithString: "")
     private let cancelButton = NSButton()
 
     override init(frame frameRect: NSRect) {
@@ -34,12 +34,6 @@ class TranscribeProgressView: NSView {
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
         addSubview(statusLabel)
 
-        progressLabel.font = .monospacedDigitSystemFont(ofSize: 13, weight: .regular)
-        progressLabel.textColor = Theme.silenceText
-        progressLabel.alignment = .center
-        progressLabel.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(progressLabel)
-
         cancelButton.title = "Cancel"
         cancelButton.bezelStyle = .rounded
         cancelButton.target = self
@@ -47,29 +41,16 @@ class TranscribeProgressView: NSView {
         cancelButton.translatesAutoresizingMaskIntoConstraints = false
         addSubview(cancelButton)
 
-        NotificationCenter.default.addObserver(
-            self, selector: #selector(settingsDidChange),
-            name: .settingsChanged, object: nil
-        )
-
         NSLayoutConstraint.activate([
             spinner.centerXAnchor.constraint(equalTo: centerXAnchor),
-            spinner.centerYAnchor.constraint(equalTo: centerYAnchor, constant: -40),
+            spinner.centerYAnchor.constraint(equalTo: centerYAnchor, constant: -32),
 
             statusLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
             statusLabel.topAnchor.constraint(equalTo: spinner.bottomAnchor, constant: 16),
 
-            progressLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
-            progressLabel.topAnchor.constraint(equalTo: statusLabel.bottomAnchor, constant: 8),
-
             cancelButton.centerXAnchor.constraint(equalTo: centerXAnchor),
-            cancelButton.topAnchor.constraint(equalTo: progressLabel.bottomAnchor, constant: 20),
+            cancelButton.topAnchor.constraint(equalTo: statusLabel.bottomAnchor, constant: 20),
         ])
-    }
-
-    @objc private func settingsDidChange() {
-        statusLabel.textColor = Theme.textSecondary
-        progressLabel.textColor = Theme.silenceText
     }
 
     func updateProgress(_ progress: TranscribeProgress) {
@@ -77,21 +58,11 @@ class TranscribeProgressView: NSView {
         case .loadingModel:
             statusLabel.stringValue = "Loading model…"
         case .transcribing:
-            if let pct = progress.progress {
-                statusLabel.stringValue = "Transcribing…"
-                progressLabel.stringValue = "\(pct)%"
-            } else {
-                statusLabel.stringValue = "Transcribing…"
-            }
-        case .refining:
-            statusLabel.stringValue = "Refining word timestamps…"
-            progressLabel.stringValue = ""
+            statusLabel.stringValue = "Transcribing…"
         case .complete:
             statusLabel.stringValue = "Processing transcript…"
-            progressLabel.stringValue = ""
         case .error:
             statusLabel.stringValue = progress.message ?? "Error"
-            progressLabel.stringValue = ""
         }
     }
 

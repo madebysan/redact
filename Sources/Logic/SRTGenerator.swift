@@ -75,17 +75,32 @@ func generateSrt(words: [Word], totalDuration: Double) -> String {
 }
 
 /// Build deleted ranges without padding — used for SRT time offset calculation.
+/// Runs of consecutive deleted words collapse into one range so micro-gaps
+/// inside a deletion don't inflate the edited timeline.
 private func buildDeletedRangesForSrt(_ words: [Word]) -> [TimeRange] {
     var deleted: [TimeRange] = []
+    var i = 0
 
-    for word in words {
-        if word.deleted {
-            if var last = deleted.last, word.start <= last.end + 0.05 {
-                last.end = max(last.end, word.end)
-                deleted[deleted.count - 1] = last
-            } else {
-                deleted.append(TimeRange(start: word.start, end: word.end))
-            }
+    while i < words.count {
+        guard words[i].deleted else {
+            i += 1
+            continue
+        }
+
+        let runStart = i
+        while i < words.count && words[i].deleted {
+            i += 1
+        }
+        let runEnd = i - 1
+
+        let spanStart = words[runStart].start
+        let spanEnd = words[runEnd].end
+
+        if var last = deleted.last, spanStart <= last.end + 0.05 {
+            last.end = max(last.end, spanEnd)
+            deleted[deleted.count - 1] = last
+        } else {
+            deleted.append(TimeRange(start: spanStart, end: spanEnd))
         }
     }
 

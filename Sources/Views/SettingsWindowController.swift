@@ -477,28 +477,23 @@ private class SettingsContentView: NSView {
         ])
     }
 
-    // MARK: - Theme Update
+    // MARK: - Appearance + Settings reactions
 
+    /// Fired when user-facing Settings (model pick, theme, fonts) change.
+    /// Dynamic NSColors handle text + tint auto-updates; we just refresh
+    /// whatever actually depends on the setting value (model download state).
     @objc private func settingsDidChange() {
-        window?.backgroundColor = Theme.surface0
+        checkModelAvailability()
+    }
 
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
         for card in cardViews {
             card.layer?.backgroundColor = Theme.surface1.cgColor
         }
         for sep in separatorViews {
             sep.layer?.backgroundColor = Theme.divider.cgColor
         }
-        for label in rowLabels {
-            label.textColor = Theme.textPrimary
-        }
-        for label in sectionTitleLabels {
-            label.textColor = Theme.textSecondary
-        }
-        for label in descriptionLabels {
-            label.textColor = Theme.textTertiary
-        }
-        crossfadeValueLabel.textColor = Theme.textSecondary
-        checkModelAvailability()
     }
 
     // MARK: - Load Settings

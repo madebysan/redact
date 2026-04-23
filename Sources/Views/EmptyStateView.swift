@@ -68,11 +68,6 @@ class EmptyStateView: NSView {
         importButton.translatesAutoresizingMaskIntoConstraints = false
         addSubview(importButton)
 
-        NotificationCenter.default.addObserver(
-            self, selector: #selector(settingsDidChange),
-            name: .settingsChanged, object: nil
-        )
-
         NSLayoutConstraint.activate([
             iconView.centerXAnchor.constraint(equalTo: centerXAnchor),
             iconView.centerYAnchor.constraint(equalTo: centerYAnchor, constant: -60),
@@ -117,13 +112,6 @@ class EmptyStateView: NSView {
             dashedBorder?.removeFromSuperlayer()
             dashedBorder = nil
         }
-    }
-
-    @objc private func settingsDidChange() {
-        iconView.contentTintColor = Theme.textDimmed
-        titleLabel.textColor = Theme.textSecondary
-        subtitleLabel.textColor = Theme.silenceText
-        orLabel.textColor = Theme.textDimmed
     }
 
     @objc private func importClicked() {

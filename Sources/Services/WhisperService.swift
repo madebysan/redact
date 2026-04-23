@@ -16,7 +16,7 @@ class WhisperService {
         isCancelled = false
         let modelVariant = model ?? Settings.shared.whisperModel
 
-        // Get audio duration for progress estimation
+        // Audio duration only used for the RawTranscript's total length.
         let audioURL = URL(fileURLWithPath: audioPath)
         let asset = AVURLAsset(url: audioURL)
         let audioDuration = try await asset.load(.duration).seconds
@@ -46,26 +46,14 @@ class WhisperService {
             chunkingStrategy: .vad
         )
 
-        onProgress(TranscribeProgress(status: .transcribing, progress: 0, message: "Transcribing…"))
-
-        // Transcribe with progress callback
-        let totalWindows = max(1, Int(ceil(audioDuration / 30.0)))
+        onProgress(TranscribeProgress(status: .transcribing, message: "Transcribing…"))
 
         let results = try await whisperKit.transcribe(
             audioPath: audioPath,
             decodeOptions: options,
-            callback: { [weak self] progress in
+            callback: { [weak self] _ in
                 guard let self else { return false }
-                if self.isCancelled { return false }
-
-                // Estimate percentage from window index
-                let percent = min(99, Int(Double(progress.windowId + 1) / Double(totalWindows) * 100))
-                onProgress(TranscribeProgress(
-                    status: .transcribing,
-                    progress: percent,
-                    message: "Transcribing… \(percent)%"
-                ))
-                return true
+                return !self.isCancelled
             }
         )
 

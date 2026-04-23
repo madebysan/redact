@@ -55,14 +55,10 @@ class ErrorBannerView: NSView {
         // Click anywhere to dismiss
         let clickGesture = NSClickGestureRecognizer(target: self, action: #selector(dismissClicked))
         addGestureRecognizer(clickGesture)
-
-        NotificationCenter.default.addObserver(
-            self, selector: #selector(settingsDidChange),
-            name: .settingsChanged, object: nil
-        )
     }
 
-    @objc private func settingsDidChange() {
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
         layer?.backgroundColor = Theme.errorBackground.cgColor
     }
 

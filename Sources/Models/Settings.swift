@@ -138,11 +138,11 @@ class Settings {
 
     // MARK: - Crossfade Duration
 
-    /// Audio crossfade duration in milliseconds (10–500ms, default 70ms).
+    /// Audio crossfade duration in milliseconds (10–500ms, default 200ms).
     var crossfadeMs: Double {
         get {
             let value = defaults.double(forKey: Key.crossfadeMs)
-            return value > 0 ? value : 70
+            return value > 0 ? value : 200
         }
         set {
             defaults.set(newValue, forKey: Key.crossfadeMs)

@@ -84,11 +84,6 @@ class TransportControlsView: NSView {
         progressBar.translatesAutoresizingMaskIntoConstraints = false
         addSubview(progressBar)
 
-        NotificationCenter.default.addObserver(
-            self, selector: #selector(settingsDidChange),
-            name: .settingsChanged, object: nil
-        )
-
         NSLayoutConstraint.activate([
             // Controls row
             skipBackButton.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
@@ -119,9 +114,9 @@ class TransportControlsView: NSView {
         ])
     }
 
-    @objc private func settingsDidChange() {
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
         layer?.backgroundColor = Theme.surface1.cgColor
-        timeLabel.textColor = Theme.textTertiary
     }
 
     // MARK: - Public Updates

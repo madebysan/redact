@@ -2,8 +2,9 @@ import AVFoundation
 import AppKit
 import QuartzCore
 
-/// Manages AVPlayer playback, the 60fps display-link loop that skips deleted ranges,
-/// and audio fade in/out at cut boundaries. Port of usePlaybackSync.ts.
+/// Manages AVPlayer playback. Uses AVPlayer's own periodic time observer for the
+/// 30Hz "skip deleted ranges + fade audio + highlight current word" loop, so we
+/// don't need to babysit a CVDisplayLink.
 class PlaybackController {
     let player = AVPlayer()
 
@@ -11,7 +12,7 @@ class PlaybackController {
     var onHighlightWord: ((String?) -> Void)?
     var onPlayingChanged: ((Bool) -> Void)?
 
-    private var displayLink: CVDisplayLink?
+    private var timeObserverToken: Any?
     private var isSeeking = false
     private var fadeInStart: CFTimeInterval = 0
     private var allWords: [Word] = []
@@ -20,11 +21,13 @@ class PlaybackController {
     private var fadeSec: Double { Settings.shared.crossfadeSec }
 
     init() {
-        setupDisplayLink()
+        setupPeriodicObserver()
     }
 
     deinit {
-        stopDisplayLink()
+        if let timeObserverToken {
+            player.removeTimeObserver(timeObserverToken)
+        }
     }
 
     // MARK: - Public API
@@ -67,32 +70,19 @@ class PlaybackController {
         player.rate = rate
     }
 
-    // MARK: - Display Link
+    // MARK: - Observer
 
-    private func setupDisplayLink() {
-        var link: CVDisplayLink?
-        CVDisplayLinkCreateWithActiveCGDisplays(&link)
-        guard let link else { return }
-        displayLink = link
-
-        let callback: CVDisplayLinkOutputCallback = { _, _, _, _, _, userInfo -> CVReturn in
-            guard let userInfo else { return kCVReturnSuccess }
-            let controller = Unmanaged<PlaybackController>.fromOpaque(userInfo).takeUnretainedValue()
-            DispatchQueue.main.async {
-                controller.tick()
-            }
-            return kCVReturnSuccess
+    private func setupPeriodicObserver() {
+        // 30Hz is plenty for the skip-over-deleted-range check and visibly smooth
+        // for cursor movement. Observer only fires during playback, after seeks,
+        // and on rate changes — no work wasted while paused.
+        let interval = CMTime(seconds: 1.0 / 30.0, preferredTimescale: 600)
+        timeObserverToken = player.addPeriodicTimeObserver(
+            forInterval: interval,
+            queue: .main
+        ) { [weak self] _ in
+            self?.tick()
         }
-
-        CVDisplayLinkSetOutputCallback(link, callback, Unmanaged.passUnretained(self).toOpaque())
-        CVDisplayLinkStart(link)
-    }
-
-    private func stopDisplayLink() {
-        if let link = displayLink {
-            CVDisplayLinkStop(link)
-        }
-        displayLink = nil
     }
 
     private func tick() {
@@ -101,9 +91,8 @@ class PlaybackController {
         let time = player.currentTime().seconds
         guard time.isFinite else { return }
 
-        // Check if in a deleted range
+        // Inside a deleted range → mute and skip past.
         if let deletedRange = findDeletedRange(time: time, deletedRanges: deletedRanges) {
-            // Mute and skip past
             player.volume = 0
             isSeeking = true
             let target = CMTime(seconds: deletedRange.end + 0.01, preferredTimescale: 600)
@@ -120,7 +109,7 @@ class PlaybackController {
 
         onTimeUpdate?(time)
 
-        // Fade-in after a skip
+        // Fade-in after a skip.
         if fadeInStart > 0 {
             let elapsed = CACurrentMediaTime() - fadeInStart
             if elapsed < fadeSec {
@@ -131,7 +120,7 @@ class PlaybackController {
             }
         }
 
-        // Fade-out approaching next deleted range
+        // Fade-out approaching next deleted range.
         if fadeInStart == 0 {
             if let nextStart = findNextDeletedStart(time: time, deletedRanges: deletedRanges) {
                 let dist = nextStart - time
@@ -143,7 +132,6 @@ class PlaybackController {
             }
         }
 
-        // Highlight current word (skip silence and deleted tokens)
         if let word = findWordAtTime(allWords, time: time), !word.deleted, !word.isActualSilence {
             onHighlightWord?(word.id)
         }

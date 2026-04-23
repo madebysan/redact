@@ -42,11 +42,6 @@ class VideoPreviewView: NSView {
         playerView.isHidden = true
         addSubview(playerView)
 
-        NotificationCenter.default.addObserver(
-            self, selector: #selector(settingsDidChange),
-            name: .settingsChanged, object: nil
-        )
-
         NSLayoutConstraint.activate([
             placeholderLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
             placeholderLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -58,8 +53,8 @@ class VideoPreviewView: NSView {
         ])
     }
 
-    @objc private func settingsDidChange() {
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
         layer?.backgroundColor = Theme.surface0.cgColor
-        placeholderLabel.textColor = Theme.textDimmed
     }
 }

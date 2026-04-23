@@ -12,6 +12,7 @@ class ExportSheetView: NSView {
     var onExportVideo: ((String, String?, Double, ExportVoiceOption) -> Void)?  // (format, quality, speed, voice)
     var onExportSRT: (() -> Void)?
     var onCancel: (() -> Void)?
+    var onCancelExport: (() -> Void)?  // cancel during progress mode
     var onDismiss: (() -> Void)?  // dismiss after completion/error
 
     private let elevenLabsService = ElevenLabsService()
@@ -39,6 +40,12 @@ class ExportSheetView: NSView {
     private let percentLabel = NSTextField(labelWithString: "")
     private let errorLabel = NSTextField(wrappingLabelWithString: "")
     private let dismissButton = NSButton()
+    private let progressCancelButton = NSButton()
+
+    /// True while we're still waiting for FFmpeg's first time= tick.
+    /// During this window the bar animates indeterminately so it's clear
+    /// something is happening even when percent can't yet be computed.
+    private var hasReceivedProgress = false
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -228,10 +235,13 @@ class ExportSheetView: NSView {
         dismissButton.translatesAutoresizingMaskIntoConstraints = false
         addSubview(dismissButton)
 
-        NotificationCenter.default.addObserver(
-            self, selector: #selector(settingsDidChange),
-            name: .settingsChanged, object: nil
-        )
+        progressCancelButton.title = "Cancel Export"
+        progressCancelButton.bezelStyle = .rounded
+        progressCancelButton.target = self
+        progressCancelButton.action = #selector(cancelExportClicked)
+        progressCancelButton.isHidden = true
+        progressCancelButton.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(progressCancelButton)
 
         NSLayoutConstraint.activate([
             // Options layout
@@ -305,29 +315,49 @@ class ExportSheetView: NSView {
 
             dismissButton.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -20),
             dismissButton.centerXAnchor.constraint(equalTo: centerXAnchor),
+
+            progressCancelButton.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -20),
+            progressCancelButton.centerXAnchor.constraint(equalTo: centerXAnchor),
         ])
     }
 
     // MARK: - Progress Mode
 
     /// Switch to progress mode: hide options, show progress bar + status.
+    /// Starts indeterminate — flips to determinate on the first updateProgress call
+    /// (after ffmpeg's filter graph setup completes and encoding actually begins).
     func showProgressMode(status: String) {
         for view in optionViews { view.isHidden = true }
         statusLabel.stringValue = status
         statusLabel.textColor = Theme.textPrimary
         statusLabel.isHidden = false
-        progressIndicator.doubleValue = 0
+
+        hasReceivedProgress = false
+        progressIndicator.isIndeterminate = true
+        progressIndicator.startAnimation(nil)
         progressIndicator.isHidden = false
-        percentLabel.stringValue = "0%"
+
+        percentLabel.stringValue = ""
         percentLabel.isHidden = false
+
         errorLabel.isHidden = true
         dismissButton.isHidden = true
+        progressCancelButton.isHidden = false
     }
 
-    /// Update the progress bar and status text.
+    /// Update the progress bar and status text. A call with percent > 0 flips
+    /// the indicator from indeterminate to determinate — until then we're still
+    /// in "working on it, no ETA yet" territory.
     func updateProgress(_ percent: Double, status: String? = nil) {
-        progressIndicator.doubleValue = percent
-        percentLabel.stringValue = "\(Int(percent))%"
+        if percent > 0, !hasReceivedProgress {
+            hasReceivedProgress = true
+            progressIndicator.stopAnimation(nil)
+            progressIndicator.isIndeterminate = false
+        }
+        if hasReceivedProgress {
+            progressIndicator.doubleValue = percent
+            percentLabel.stringValue = "\(Int(percent))%"
+        }
         if let status {
             statusLabel.stringValue = status
         }
@@ -337,10 +367,12 @@ class ExportSheetView: NSView {
     func showError(_ message: String) {
         statusLabel.stringValue = "Export Failed"
         statusLabel.textColor = .systemRed
+        progressIndicator.stopAnimation(nil)
         progressIndicator.isHidden = true
         percentLabel.isHidden = true
         errorLabel.stringValue = message
         errorLabel.isHidden = false
+        progressCancelButton.isHidden = true
         dismissButton.title = "Close"
         dismissButton.isHidden = false
     }
@@ -349,15 +381,30 @@ class ExportSheetView: NSView {
     func showComplete() {
         statusLabel.stringValue = "Export Complete"
         statusLabel.textColor = .systemGreen
+        progressIndicator.stopAnimation(nil)
+        progressIndicator.isIndeterminate = false
         progressIndicator.doubleValue = 100
         percentLabel.stringValue = "100%"
+        progressCancelButton.isHidden = true
         dismissButton.title = "Done"
         dismissButton.isHidden = false
     }
 
+    /// Show a "cancelling…" state while the ffmpeg subprocess is shutting down.
+    func showCancelling() {
+        statusLabel.stringValue = "Cancelling…"
+        statusLabel.textColor = Theme.textSecondary
+        progressIndicator.stopAnimation(nil)
+        progressIndicator.startAnimation(nil)
+        progressIndicator.isIndeterminate = true
+        percentLabel.stringValue = ""
+        progressCancelButton.isEnabled = false
+    }
+
     // MARK: - Actions
 
-    @objc private func settingsDidChange() {
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
         layer?.backgroundColor = Theme.surface2.cgColor
     }
 
@@ -487,6 +534,10 @@ class ExportSheetView: NSView {
 
     @objc private func cancelClicked() {
         onCancel?()
+    }
+
+    @objc private func cancelExportClicked() {
+        onCancelExport?()
     }
 
     @objc private func dismissClicked() {

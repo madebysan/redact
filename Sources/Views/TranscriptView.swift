@@ -5,11 +5,15 @@ extension NSAttributedString.Key {
     static let wordID = NSAttributedString.Key("com.redact.wordID")
 }
 
-/// Read-only transcript display with styled text, paragraph breaks at gaps, and dimmed silence tokens.
-/// In Phase 4 this gets click/drag interaction and visual states.
+/// Read-only transcript display with styled text, paragraph breaks at gaps,
+/// dimmed silence tokens, and native mouse-driven word selection.
 class TranscriptView: NSView {
     private let scrollView = NSScrollView()
-    private let textView = NSTextView()
+    private let textView: InteractiveTextView
+
+    /// Set by MainWindowController once the project is in editing state.
+    weak var project: ProjectDocument?
+    var onWordClicked: ((Word) -> Void)?
 
     /// Maps word IDs to their NSRange in the text storage.
     private(set) var wordRanges: [String: NSRange] = [:]
@@ -17,12 +21,27 @@ class TranscriptView: NSView {
     /// All words in display order (for hit-testing and interaction).
     private(set) var displayedWords: [Word] = []
 
+    /// The word currently highlighted for playback (O(1) clear on next highlight).
+    private var currentlyHighlightedId: String?
+
+    /// The snapshot of selected/deleted state used during the last appearance pass —
+    /// lets refreshAllWordAppearances touch only words whose state changed.
+    private var lastAppearance: [String: (deleted: Bool, selected: Bool)] = [:]
+
+    // MARK: - Selection state
+
+    private var isDragging = false
+    private var dragStartId: String?
+    private var lastClickId: String?
+
     override init(frame frameRect: NSRect) {
+        self.textView = InteractiveTextView()
         super.init(frame: frameRect)
         setup()
     }
 
     required init?(coder: NSCoder) {
+        self.textView = InteractiveTextView()
         super.init(coder: coder)
         setup()
     }
@@ -38,7 +57,6 @@ class TranscriptView: NSView {
             name: .settingsChanged, object: nil
         )
 
-        // Scroll view
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = false
         scrollView.borderType = .noBorder
@@ -46,7 +64,7 @@ class TranscriptView: NSView {
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         addSubview(scrollView)
 
-        // Text view
+        textView.transcriptView = self
         textView.isEditable = false
         textView.isSelectable = false
         textView.drawsBackground = false
@@ -67,89 +85,99 @@ class TranscriptView: NSView {
         ])
     }
 
-    /// Build the transcript text from segments with paragraph breaks.
+    /// Build the transcript as a stack of subtitle-style lines.
+    /// Each line is one paragraph with its own leading indent (room for a future
+    /// drag handle) and a small timestamp prefix for orientation.
     func setTranscript(segments: [Segment]) {
         currentSegments = segments
         wordRanges = [:]
         displayedWords = []
+        currentlyHighlightedId = nil
+        lastAppearance = [:]
 
+        let lines = computeLines(segments: segments)
         let textStorage = NSMutableAttributedString()
         let settings = Settings.shared
         let fontSize = settings.transcriptFontSize
 
+        let lineStyle = NSMutableParagraphStyle()
+        lineStyle.paragraphSpacing = 10               // gap after each line
+        lineStyle.paragraphSpacingBefore = 0
+        lineStyle.firstLineHeadIndent = 56            // room for timestamp + future drag handle
+        lineStyle.headIndent = 56                     // wrapped lines align under body
+        lineStyle.lineSpacing = 2
+
         let normalAttrs: [NSAttributedString.Key: Any] = [
             .font: settings.transcriptFont(ofSize: fontSize, weight: .regular),
             .foregroundColor: Theme.wordNormal,
+            .paragraphStyle: lineStyle,
         ]
 
         let silenceAttrs: [NSAttributedString.Key: Any] = [
             .font: settings.transcriptFont(ofSize: fontSize - 2, weight: .light),
             .foregroundColor: Theme.silenceText,
+            .paragraphStyle: lineStyle,
         ]
 
-        var previousWordEnd: Double = 0
-        var isFirstWord = true
+        let timestampAttrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: fontSize - 3, weight: .regular),
+            .foregroundColor: Theme.textDimmed,
+            .paragraphStyle: lineStyle,
+        ]
 
-        for segment in segments {
-            for word in segment.words {
+        for (lineIndex, line) in lines.enumerated() {
+            if lineIndex > 0 {
+                textStorage.append(NSAttributedString(string: "\n", attributes: normalAttrs))
+            }
+
+            // Timestamp prefix — clickable space but no .wordID, so clicks fall through.
+            let timestamp = formatTime(line.startTime)
+            textStorage.append(NSAttributedString(string: "\(timestamp)   ", attributes: timestampAttrs))
+
+            for (wordIndex, word) in line.words.enumerated() {
                 displayedWords.append(word)
 
-                // Add paragraph break at >1s gaps between spoken words (not silence tokens)
-                if !isFirstWord && !word.isActualSilence {
-                    let gap = word.start - previousWordEnd
-                    if gap > 1.0 {
-                        textStorage.append(NSAttributedString(string: "\n\n", attributes: normalAttrs))
-                    }
-                }
-
-                // Add space between words (not at start)
-                if !isFirstWord {
+                if wordIndex > 0 {
                     textStorage.append(NSAttributedString(string: " ", attributes: normalAttrs))
                 }
 
-                // Word text
-                let attrs = word.isActualSilence ? silenceAttrs : normalAttrs
-                var wordAttrs = attrs
+                var wordAttrs = word.isActualSilence ? silenceAttrs : normalAttrs
                 wordAttrs[.wordID] = word.id
 
                 let range = NSRange(location: textStorage.length, length: word.word.count)
                 textStorage.append(NSAttributedString(string: word.word, attributes: wordAttrs))
                 wordRanges[word.id] = range
-
-                if !word.isActualSilence {
-                    previousWordEnd = word.end
-                }
-                isFirstWord = false
             }
         }
 
         textView.textStorage?.setAttributedString(textStorage)
     }
 
-    /// Highlight the currently-playing word with a subtle background.
+    /// Highlight the currently-playing word. O(1) — clears only the previous range.
     func highlightWord(id: String?) {
         guard let storage = textView.textStorage else { return }
 
-        // Clear previous highlight
-        storage.enumerateAttribute(.backgroundColor, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
-            if value != nil {
-                storage.removeAttribute(.backgroundColor, range: range)
+        if let prevId = currentlyHighlightedId, let prevRange = wordRanges[prevId] {
+            storage.removeAttribute(.backgroundColor, range: prevRange)
+            // Re-apply selection background if still selected.
+            if let project, project.selectedWordIds.contains(prevId) {
+                storage.addAttribute(.backgroundColor, value: Theme.wordSelectedBackground, range: prevRange)
             }
         }
 
-        // Apply new highlight
-        if let id, let range = wordRanges[id] {
-            let highlightColor = Settings.shared.highlightColor.withAlphaComponent(0.2)
-            storage.addAttribute(.backgroundColor, value: highlightColor, range: range)
+        currentlyHighlightedId = id
 
-            // Auto-scroll to visible
+        if let id, let range = wordRanges[id] {
+            let color = Settings.shared.highlightColor.withAlphaComponent(0.2)
+            storage.addAttribute(.backgroundColor, value: color, range: range)
             textView.scrollRangeToVisible(range)
         }
     }
 
-    /// Update visual state for a word (deleted, selected, normal).
+    /// Apply visual state for a single word.
     func updateWordAppearance(wordId: String, deleted: Bool, selected: Bool) {
         guard let storage = textView.textStorage, let range = wordRanges[wordId] else { return }
+        lastAppearance[wordId] = (deleted, selected)
 
         if deleted {
             storage.addAttributes([
@@ -174,16 +202,129 @@ class TranscriptView: NSView {
         }
     }
 
+    /// Diff the full word list against the last appearance snapshot and
+    /// update only the words whose visual state actually changed.
+    func refreshAllWordAppearances() {
+        guard let project else { return }
+        let selected = project.selectedWordIds
+
+        for word in project.allWords {
+            let isSelected = selected.contains(word.id)
+            let prev = lastAppearance[word.id]
+            if prev?.deleted != word.deleted || prev?.selected != isSelected {
+                updateWordAppearance(wordId: word.id, deleted: word.deleted, selected: isSelected)
+            }
+        }
+    }
+
     @objc private func settingsDidChange() {
         guard let segments = currentSegments else { return }
         setTranscript(segments: segments)
+        refreshAllWordAppearances()
     }
 
-    /// Get the word ID at a given point in the view.
+    /// Get the word ID at a given point in this view's coordinates.
     func wordId(at point: NSPoint) -> String? {
         let textPoint = textView.convert(point, from: self)
-        let index = textView.characterIndexForInsertion(at: textPoint)
+        return wordId(atTextViewPoint: textPoint)
+    }
+
+    fileprivate func wordId(atTextViewPoint point: NSPoint) -> String? {
+        let index = textView.characterIndexForInsertion(at: point)
         guard index >= 0, index < (textView.textStorage?.length ?? 0) else { return nil }
         return textView.textStorage?.attribute(.wordID, at: index, effectiveRange: nil) as? String
+    }
+
+    // MARK: - Selection handling (was WordSelectionController)
+
+    fileprivate func handleMouseDown(wordId: String, event: NSEvent) {
+        guard let project else { return }
+        guard let word = project.allWords.first(where: { $0.id == wordId }) else { return }
+
+        // Deleted words: click to restore.
+        if word.deleted {
+            project.restoreWord(wordId)
+            refreshAllWordAppearances()
+            return
+        }
+
+        isDragging = true
+        dragStartId = wordId
+
+        let isShift = event.modifierFlags.contains(.shift)
+        let isCmd = event.modifierFlags.contains(.command)
+
+        if isShift, let lastId = lastClickId {
+            project.selectWords(wordRange(from: lastId, to: wordId))
+        } else if isCmd {
+            if project.selectedWordIds.contains(wordId) {
+                var current = project.selectedWordIds
+                current.remove(wordId)
+                project.selectWords(Array(current))
+            } else {
+                project.addToSelection([wordId])
+            }
+        } else {
+            project.selectWords([wordId])
+        }
+
+        lastClickId = wordId
+        refreshAllWordAppearances()
+        onWordClicked?(word)
+    }
+
+    fileprivate func handleMouseDragged(to wordId: String?) {
+        guard isDragging, let dragStartId, let project, let wordId else { return }
+        project.selectWords(wordRange(from: dragStartId, to: wordId))
+        refreshAllWordAppearances()
+    }
+
+    fileprivate func handleMouseUp() {
+        isDragging = false
+    }
+
+    private func wordRange(from fromId: String, to toId: String) -> [String] {
+        guard let project else { return [] }
+        let words = project.allWords
+        guard let fromIdx = words.firstIndex(where: { $0.id == fromId }),
+              let toIdx = words.firstIndex(where: { $0.id == toId }) else {
+            return []
+        }
+        let start = min(fromIdx, toIdx)
+        let end = max(fromIdx, toIdx)
+        return words[start...end].map(\.id)
+    }
+}
+
+// MARK: - NSTextView subclass that forwards mouse events to its TranscriptView
+
+private final class InteractiveTextView: NSTextView {
+    weak var transcriptView: TranscriptView?
+
+    override func mouseDown(with event: NSEvent) {
+        guard let transcriptView else {
+            super.mouseDown(with: event)
+            return
+        }
+        let point = convert(event.locationInWindow, from: nil)
+        if let wordId = transcriptView.wordId(atTextViewPoint: point) {
+            transcriptView.handleMouseDown(wordId: wordId, event: event)
+            return
+        }
+        super.mouseDown(with: event)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let transcriptView else {
+            super.mouseDragged(with: event)
+            return
+        }
+        let point = convert(event.locationInWindow, from: nil)
+        transcriptView.handleMouseDragged(to: transcriptView.wordId(atTextViewPoint: point))
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        transcriptView?.handleMouseUp()
+        super.mouseUp(with: event)
     }
 }

@@ -23,9 +23,13 @@ class MainSplitViewController: NSViewController {
     private var currentState: AppState = .empty
 
     override func loadView() {
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: 1400, height: 900))
+        let container = ThemedContainerView(frame: NSRect(x: 0, y: 0, width: 1400, height: 900))
         container.wantsLayer = true
         container.layer?.backgroundColor = Theme.surface0.cgColor
+        container.onAppearanceChange = { [weak container, weak self] in
+            container?.layer?.backgroundColor = Theme.surface0.cgColor
+            self?.splitDivider?.layer?.backgroundColor = Theme.divider.cgColor
+        }
         self.view = container
     }
 
@@ -33,16 +37,6 @@ class MainSplitViewController: NSViewController {
         super.viewDidLoad()
         setupErrorBanner()
         showEmptyState()
-
-        NotificationCenter.default.addObserver(
-            self, selector: #selector(settingsDidChange),
-            name: .settingsChanged, object: nil
-        )
-    }
-
-    @objc private func settingsDidChange() {
-        view.layer?.backgroundColor = Theme.surface0.cgColor
-        splitDivider?.layer?.backgroundColor = Theme.divider.cgColor
     }
 
     private func setupErrorBanner() {
@@ -288,6 +282,20 @@ class MainSplitViewController: NSViewController {
     }
 }
 
+// MARK: - Themed Container View
+
+/// An NSView that fires a closure whenever the system or forced appearance changes.
+/// Used so the owning view controller can re-apply layer-based colors without
+/// going through a separate NotificationCenter subscription.
+private final class ThemedContainerView: NSView {
+    var onAppearanceChange: (() -> Void)?
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        onAppearanceChange?()
+    }
+}
+
 // MARK: - Divider View
 
 /// A thin visible divider line with a wider hit area. Shows resize cursor on hover.
@@ -310,12 +318,6 @@ private class DividerView: NSView {
         // The view is 6pt wide but only the center 1pt line is visible
         lineLayer.backgroundColor = Theme.divider.cgColor
         layer?.addSublayer(lineLayer)
-
-        // Listen for theme changes
-        NotificationCenter.default.addObserver(
-            self, selector: #selector(settingsDidChange),
-            name: .settingsChanged, object: nil
-        )
     }
 
     override func layout() {
@@ -328,7 +330,8 @@ private class DividerView: NSView {
         addCursorRect(bounds, cursor: .resizeLeftRight)
     }
 
-    @objc private func settingsDidChange() {
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
         lineLayer.backgroundColor = Theme.divider.cgColor
     }
 }

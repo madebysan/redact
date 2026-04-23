@@ -5,26 +5,46 @@ import Foundation
 let CUT_PADDING: Double = 0.075
 
 /// Build a sorted array of deleted time ranges from transcript words.
-/// Each range is padded by CUT_PADDING so we don't hear the edge of
-/// a deleted word. Adjacent ranges are merged.
+///
+/// A *run* is a maximal sequence of consecutive deleted words in the word list.
+/// Each run collapses into a single TimeRange spanning first.start → last.end,
+/// with CUT_PADDING only on the outer edges (not between internal words).
+///
+/// This matters for micro-gaps: Whisper's word timings routinely leave 150-800ms
+/// gaps between words. If both neighbors are deleted, the audio in that gap has
+/// no kept content to belong to, so it goes with the deletion.
 func buildDeletedRanges(_ words: [Word]) -> [TimeRange] {
     var deleted: [TimeRange] = []
+    var i = 0
 
-    for word in words {
-        if word.deleted {
-            // No padding for silence tokens — their boundaries touch adjacent words,
-            // so padding would clip the start/end of spoken words
-            let pad = word.isActualSilence ? 0.0 : CUT_PADDING
-            let padStart = max(0, word.start - pad)
-            let padEnd = word.end + pad
+    while i < words.count {
+        guard words[i].deleted else {
+            i += 1
+            continue
+        }
 
-            if var last = deleted.last, padStart <= last.end {
-                // Merge overlapping/adjacent padded ranges
-                last.end = max(last.end, padEnd)
-                deleted[deleted.count - 1] = last
-            } else {
-                deleted.append(TimeRange(start: padStart, end: padEnd))
-            }
+        // Walk to the end of this run.
+        let runStart = i
+        while i < words.count && words[i].deleted {
+            i += 1
+        }
+        let runEnd = i - 1
+
+        let first = words[runStart]
+        let last = words[runEnd]
+
+        // Silence tokens already touch their neighbors, so they don't get padding.
+        let startPad = first.isActualSilence ? 0.0 : CUT_PADDING
+        let endPad = last.isActualSilence ? 0.0 : CUT_PADDING
+        let padStart = max(0, first.start - startPad)
+        let padEnd = last.end + endPad
+
+        // Still merge with previous range if padded edges touch.
+        if var prev = deleted.last, padStart <= prev.end {
+            prev.end = max(prev.end, padEnd)
+            deleted[deleted.count - 1] = prev
+        } else {
+            deleted.append(TimeRange(start: padStart, end: padEnd))
         }
     }
 
