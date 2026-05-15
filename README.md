@@ -1,19 +1,22 @@
-<p align="center">
-  <img src="assets/app-icon.png" width="128" height="128" alt="Redact app icon">
-</p>
-<h1 align="center">Redact</h1>
-<p align="center">Trim video by deleting from its transcript.<br>
+<p><img src="assets/app-icon.png" width="128" height="128" alt="Redact app icon"></p>
+
+<h1>Redact</h1>
+
+<p>Trim video by deleting from its transcript.<br>
 No timeline, no video editor. Select words, delete, export.</p>
-<p align="center"><strong>Version 1.3.0</strong> · macOS 14+ · Apple Silicon & Intel</p>
-<p align="center"><a href="https://github.com/madebysan/redact/releases/latest"><strong>Download Redact</strong></a></p>
 
----
+<p><strong>Version 1.3.0</strong> · macOS 14+ · Apple Silicon & Intel</p>
 
-<p align="center">
-  <img src="assets/screenshot.png" width="720" alt="Redact app screenshot showing video preview, word-level transcript editing, and preferences panel">
+<p>
+  <img src="https://img.shields.io/badge/Swift-f05138" alt="Swift">
+  <img src="https://img.shields.io/badge/AppKit-0066cc" alt="AppKit">
+  <img src="https://img.shields.io/badge/WhisperKit-000000" alt="WhisperKit">
+  <img src="https://img.shields.io/badge/ffmpeg-007808" alt="ffmpeg">
 </p>
 
----
+<p><a href="https://github.com/madebysan/redact/releases/latest">Download Redact</a></p>
+
+![Redact app screenshot showing video preview, word-level transcript editing, and preferences panel](assets/screenshot.png)
 
 Redact is what I wanted from a text-based video editor. Trim a clip by editing its transcript. Runs locally. Private. Free.
 
