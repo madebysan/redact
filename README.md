@@ -1,5 +1,3 @@
-<p><img src="assets/app-icon.png" width="128" height="128" alt="Redact app icon"></p>
-
 <h1>Redact</h1>
 
 <p>Trim video by deleting from its transcript.<br>
