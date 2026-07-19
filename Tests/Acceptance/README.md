@@ -61,4 +61,4 @@ Use a synthetic transcript with no private names, media, or conversation content
 - [ ] Import representative media, edit it, save and reopen the project, and complete one video and one audio export.
 - [ ] Quit and relaunch Redact. The app starts normally and the saved project remains usable.
 
-Only mark the corresponding `[needs-san]` items in `backlog.md` complete when every applicable item above passes. Record failures with the media class, exact step, expected result, actual result, and whether the issue reproduces.
+Record failures with the media class, exact step, expected result, actual result, and whether the issue reproduces.
