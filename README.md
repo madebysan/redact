@@ -20,32 +20,34 @@ Cut takes, tighten pauses, clean up speech, and export without a timeline.</p>
 
 Redact is a native macOS editor for podcasts, interviews, tutorials, pitch videos, and other spoken media. Instead of cutting clips on a timeline, you edit the transcript and preview the result.
 
-## Features
+## Core features
 
-- **Edit by deleting words.** Select any part of the transcript and press Delete. Removed words stay visible and can be restored or undone.
-- **Review automatic cleanup.** Clean Up finds clear filler words, adjacent repetitions, and long pauses. Choose categories or individual suggestions before applying everything as one undoable edit.
-- **Edit with Codex or Claude Code.** Redact can prepare a privacy-safe transcript snapshot and copy a ready-made connection prompt. Paste it into the agent, wait for it to confirm the snapshot is connected, then describe the edit there. You review the exact words and projected duration before Redact applies the proposal as one undoable edit.
-- **Correct the transcript.** Fix a mistaken word without changing its timing or your edit decisions.
-- **Review every cut.** Jump to the previous or next edit, see how much time was removed, scrub with exact edited-time feedback, and inspect removed ranges on the source waveform.
-- **Preview the finished pacing.** Playback, transcript highlighting, edited duration, volume, full-screen video, and the waveform stay mapped to the same cut decisions.
-- **Find, copy, and select normally.** Redact uses native macOS text selection and the system Find panel.
-- **Enhance audio.** A simple export switch reduces steady background noise and balances loudness. It is local, optional, and off by default.
-- **Control the output.** Review the format, dimensions, speed, and final duration before export. Redact remembers compatible choices and can create a matching SRT subtitle file beside the media.
-- **Save work in progress.** Projects use the `.rdt` format. If the original media moves, the transcript remains editable and Redact can relink the file.
-- **Keep media private by default.** Transcription, editing, preview generation, and export happen on your Mac. Edit with Agent is an explicit opt-in that shares transcript text with the cloud agent you choose; source media and project paths are excluded.
+### Edit with Codex or Claude Code
+
+Prepare a privacy-safe transcript snapshot, paste the connection prompt into Codex or Claude Code, and describe the edit you want. Redact shows the proposed cuts and new duration before applying everything as one undoable edit.
+
+![Edit with Agent dialog for connecting Redact to Codex or Claude Code](assets/edit-with-agent.png)
+
+### Auto-trim pauses and filler words
+
+Clean Up finds clear filler words, repeated words, and long pauses. Review every suggestion, choose what to keep, and apply the selected changes in one click.
+
+![Automatic transcript cleanup with suggested repeated-word and long-pause edits](assets/automatic-cleanup.png)
+
+### Select, delete, and export
+
+Highlight words and press Delete. Preview the finished pacing, restore any cut, then export the result as video, audio, or adjusted subtitles.
+
+![Redact editor showing deleted transcript ranges, cut markers, and the final duration](assets/select-delete-export.png)
 
 ## How it works
 
-1. Import an MP4, MKV, WebM, MOV, AVI, MP3, WAV, or M4A file.
-2. [WhisperKit](https://github.com/argmaxinc/WhisperKit) transcribes it on your Mac with word-level timing. The selected model downloads automatically the first time you use it.
-3. Delete words manually, correct transcription mistakes, use **Clean Up**, or choose **Edit > Edit with Agent…** to copy a connection prompt for Codex or Claude Code. Ask for the edit in that agent conversation after it connects.
-4. Press Space to preview the edited result. Review cut transitions with Previous/Next Edit, inspect cut markers on the waveform, or enter full-screen preview. Hide the preview when you want the transcript to use the full window.
-5. Save the project as an `.rdt` file. If the source media moves, Redact opens the transcript and lets you relink it.
-6. Export video as MP4, MKV, or WebM; audio as M4A, MP3, or WAV; or adjusted subtitles as SRT.
+1. Import a video or audio file.
+2. Redact transcribes it locally with [WhisperKit](https://github.com/argmaxinc/WhisperKit).
+3. Delete words, run automatic cleanup, or ask Codex or Claude Code to propose an edit.
+4. Preview, save, and export.
 
-Preview, saved projects, subtitles, and media export all use the same edit decisions. The waveform stays available for scrubbing, and the preview can be hidden when you want more room for the transcript.
-
-Redact does not upload your media or transcript during its normal editing workflow. WhisperKit may use the network to download model files. Audio extraction and final rendering run through your local FFmpeg installation. If you choose Edit with Agent, Redact shows a disclosure before creating a sanitized transcript snapshot for the selected cloud agent; the snapshot excludes media, paths, bookmarks, and fingerprints.
+Your normal editing workflow stays on your Mac. Agent editing is opt-in and shares only a sanitized transcript snapshot with the cloud agent you choose, never the source media or project paths.
 
 ## Export formats
 
