@@ -2,7 +2,7 @@
 
 <h1>Redact</h1>
 
-<p>Edit spoken video and audio as text.<br>
+<p>Edit videos by trimming the transcript.<br>
 Cut takes, tighten pauses, clean up speech, and export without a timeline.</p>
 
 <p><strong>Version 2.0.0</strong> · macOS 14+ · Apple Silicon</p>
