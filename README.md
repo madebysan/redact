@@ -16,7 +16,7 @@ Cut takes, tighten pauses, clean up speech, and export without a timeline.</p>
 
 <p><a href="https://github.com/madebysan/redact/releases/latest">Download Redact</a></p>
 
-![Redact 2 showing its transcript-first editor, video preview, and editing toolbar](assets/screenshot.png)
+![Redact 2 intro showing its welcome tour and transcript-first editing workflow](assets/intro.gif)
 
 Redact is a native macOS editor for podcasts, interviews, tutorials, pitch videos, and other spoken media. Instead of cutting clips on a timeline, you edit the transcript and preview the result.
 
