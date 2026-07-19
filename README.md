@@ -73,29 +73,9 @@ Open the Redact DMG, drag Redact to Applications, and launch it.
 
 Redact 2 is built for Apple Silicon and requires macOS 14 or newer. It is distributed outside the Mac App Store and uses a user-installed FFmpeg executable for media processing.
 
-## Shortcuts and preferences
+## Preferences
 
-| Action | Shortcut |
-|---|---|
-| Open project | Cmd+O |
-| Import media | Cmd+Shift+O |
-| Save project | Cmd+S |
-| Export media | Cmd+Option+E |
-| Export SRT | Cmd+Shift+E |
-| Undo / Redo | Cmd+Z / Cmd+Shift+Z |
-| Delete selected | Delete |
-| Review automatic cleanup | Edit > Clean Up Transcript |
-| Copy an agent connection prompt | Edit > Edit with Agent |
-| Correct selected word | Edit > Correct Selected Word |
-| Restore selected words | Edit > Restore Selected Words |
-| Find in transcript | Cmd+F |
-| Select all | Cmd+A |
-| Play / Pause | Space |
-| Skip back / forward 5 seconds | Left / Right arrow |
-| Previous / next edit | Playback menu or preview controls |
-| Hide / show preview | Cmd+Option+P |
-| Full-screen preview | View > Enter Full Screen Preview |
-| Settings | Cmd+, |
+Redact includes keyboard shortcuts for common editing, playback, project, and export actions.
 
 Redact uses a dark interface only. Settings include a dropdown of 14 built-in macOS transcript fonts with adjustable text size, letter spacing, line spacing, playback highlight color, a transcript-only Restore Defaults action, and clearly labeled Whisper model trade-offs. Format, quality, speed, audio enhancement, and optional subtitle export are remembered for the next compatible export.
 
