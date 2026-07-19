@@ -5,18 +5,31 @@ import AppKit
 class ErrorBannerView: NSView {
     private let messageLabel = NSTextField(labelWithString: "")
     private let dismissButton = NSButton()
+    private let reduceMotionProvider: () -> Bool
     private var autoDismissTimer: Timer?
 
     var onDismiss: (() -> Void)?
 
     override init(frame frameRect: NSRect) {
+        reduceMotionProvider = { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+        super.init(frame: frameRect)
+        setup()
+    }
+
+    init(frame frameRect: NSRect, reduceMotionProvider: @escaping () -> Bool) {
+        self.reduceMotionProvider = reduceMotionProvider
         super.init(frame: frameRect)
         setup()
     }
 
     required init?(coder: NSCoder) {
+        reduceMotionProvider = { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
         super.init(coder: coder)
         setup()
+    }
+
+    deinit {
+        autoDismissTimer?.invalidate()
     }
 
     private func setup() {
@@ -65,13 +78,15 @@ class ErrorBannerView: NSView {
     func show(message: String) {
         messageLabel.stringValue = message
         isHidden = false
-        alphaValue = 0
-
-        // Slide in
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.25
-            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            animator().alphaValue = 1
+        if reduceMotionProvider() {
+            alphaValue = 1
+        } else {
+            alphaValue = 0
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.25
+                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                animator().alphaValue = 1
+            }
         }
 
         // Auto-dismiss after 5 seconds
@@ -85,14 +100,24 @@ class ErrorBannerView: NSView {
         autoDismissTimer?.invalidate()
         autoDismissTimer = nil
 
+        if reduceMotionProvider() {
+            alphaValue = 0
+            finishDismissal()
+            return
+        }
+
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.2
             context.timingFunction = CAMediaTimingFunction(name: .easeIn)
             animator().alphaValue = 0
         }, completionHandler: { [weak self] in
-            self?.isHidden = true
-            self?.onDismiss?()
+            self?.finishDismissal()
         })
+    }
+
+    private func finishDismissal() {
+        isHidden = true
+        onDismiss?()
     }
 
     @objc private func dismissClicked() {

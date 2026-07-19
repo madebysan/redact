@@ -7,9 +7,10 @@ class WaveformView: NSView {
     var onSeek: ((Double) -> Void)?
 
     private let waveformImageView = NSImageView()
+    private let cutMarkerOverlay = CutMarkerOverlayView()
     private let cursorView = NSView()
     private var totalDuration: Double = 0
-    private var waveformImage: NSImage?
+    private var waveformTask: Task<Void, Never>?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -21,6 +22,10 @@ class WaveformView: NSView {
         setup()
     }
 
+    deinit {
+        waveformTask?.cancel()
+    }
+
     private func setup() {
         wantsLayer = true
         layer?.backgroundColor = Theme.surface1.cgColor
@@ -29,6 +34,9 @@ class WaveformView: NSView {
         waveformImageView.imageScaling = .scaleAxesIndependently
         waveformImageView.translatesAutoresizingMaskIntoConstraints = false
         addSubview(waveformImageView)
+
+        cutMarkerOverlay.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(cutMarkerOverlay)
 
         // Cursor line
         cursorView.wantsLayer = true
@@ -42,6 +50,11 @@ class WaveformView: NSView {
             waveformImageView.trailingAnchor.constraint(equalTo: trailingAnchor),
             waveformImageView.bottomAnchor.constraint(equalTo: bottomAnchor),
 
+            cutMarkerOverlay.topAnchor.constraint(equalTo: topAnchor),
+            cutMarkerOverlay.leadingAnchor.constraint(equalTo: leadingAnchor),
+            cutMarkerOverlay.trailingAnchor.constraint(equalTo: trailingAnchor),
+            cutMarkerOverlay.bottomAnchor.constraint(equalTo: bottomAnchor),
+
             cursorView.topAnchor.constraint(equalTo: topAnchor),
             cursorView.bottomAnchor.constraint(equalTo: bottomAnchor),
             cursorView.widthAnchor.constraint(equalToConstant: 1.5),
@@ -49,17 +62,25 @@ class WaveformView: NSView {
         ])
     }
 
+    /// Show canonical removed source-time ranges over the source waveform.
+    func updateDeletedRanges(_ ranges: [TimeRange], duration: Double) {
+        totalDuration = duration
+        cutMarkerOverlay.update(ranges: ranges, duration: duration)
+    }
+
     /// Generate waveform from audio file.
     func loadAudio(url: URL, duration: Double) {
         totalDuration = duration
+        waveformTask?.cancel()
 
-        Task {
+        waveformTask = Task { [weak self] in
             do {
                 let waveformAnalyzer = WaveformAnalyzer()
                 let samples = try await waveformAnalyzer.samples(fromAudioAt: url, count: 200)
-                await MainActor.run {
-                    self.renderWaveform(samples: samples)
-                }
+                try Task.checkCancellation()
+                self?.renderWaveform(samples: samples)
+            } catch is CancellationError {
+                return
             } catch {
                 // Silently fail — waveform is not critical
             }
@@ -115,5 +136,46 @@ class WaveformView: NSView {
         let fraction = Double(location.x / bounds.width)
         let seekTime = fraction * totalDuration
         onSeek?(seekTime)
+    }
+}
+
+private final class CutMarkerOverlayView: NSView {
+    private var ranges: [TimeRange] = []
+    private var totalDuration: Double = 0
+
+    override var isOpaque: Bool { false }
+
+    func update(ranges: [TimeRange], duration: Double) {
+        self.ranges = ranges
+        totalDuration = duration
+        let countDescription = ranges.count == 1 ? "1 removed range" : "\(ranges.count) removed ranges"
+        setAccessibilityLabel("\(countDescription) on source waveform")
+        needsDisplay = true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard totalDuration > 0, bounds.width > 0 else { return }
+
+        let fillColor = Theme.error.withAlphaComponent(0.16)
+        let edgeColor = Theme.error.withAlphaComponent(0.75)
+        for range in ranges {
+            let startFraction = max(0, min(1, range.start / totalDuration))
+            let endFraction = max(startFraction, min(1, range.end / totalDuration))
+            let startX = CGFloat(startFraction) * bounds.width
+            let endX = CGFloat(endFraction) * bounds.width
+            let markerRect = NSRect(
+                x: startX,
+                y: 0,
+                width: max(2, endX - startX),
+                height: bounds.height
+            )
+            fillColor.setFill()
+            markerRect.fill()
+
+            edgeColor.setFill()
+            NSRect(x: markerRect.minX, y: 0, width: 1, height: bounds.height).fill()
+            NSRect(x: markerRect.maxX - 1, y: 0, width: 1, height: bounds.height).fill()
+        }
     }
 }

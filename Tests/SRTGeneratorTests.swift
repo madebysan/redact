@@ -52,6 +52,55 @@ import Testing
         makeWord("world.", start: 0.9, end: 1.5),
     ]
     let srt = generateSrt(words: words, totalDuration: 2)
-    let lines = srt.split(separator: "\n")
-    #expect(lines.count > 0)
+    #expect(srt.contains("00:00:00,000 --> 00:00:01,150"))
+}
+
+@Test func generateSrt_collapsesConsecutiveDeletedWordsIntoOneOffset() {
+    let words = [
+        makeWord("Keep", start: 0.0, end: 0.4),
+        makeWord("remove", start: 0.5, end: 0.7, deleted: true),
+        makeWord("this", start: 0.9, end: 1.1, deleted: true),
+        makeWord("End.", start: 1.2, end: 1.6),
+    ]
+
+    let srt = generateSrt(words: words, totalDuration: 2)
+
+    #expect(srt.contains("Keep End."))
+    #expect(srt.contains("00:00:00,000 --> 00:00:00,850"))
+}
+
+@Test func generateSrt_deletedSilenceUsesItsExactDuration() {
+    let words = [
+        makeWord("Start", start: 0.0, end: 0.4),
+        makeWord("—", start: 0.4, end: 0.9, deleted: true, isSilence: true),
+        makeWord("End.", start: 0.9, end: 1.3),
+    ]
+
+    let srt = generateSrt(words: words, totalDuration: 1.3)
+
+    #expect(srt.contains("00:00:00,000 --> 00:00:00,800"))
+}
+
+@Test func canonicalSrtEntryPointMatchesTheV1Adapter() {
+    let words = [
+        makeWord("Keep", start: 0.0, end: 0.4),
+        makeWord("remove", start: 0.5, end: 0.8, deleted: true),
+        makeWord("End.", start: 0.9, end: 1.3),
+    ]
+    let transcript = SourceTranscript(v1Words: words, language: "en", duration: 1.5)
+    let edits = EditDecisionList(v1Words: words)
+    let renderPlan = RenderPlan(
+        transcript: transcript,
+        edits: edits,
+        policy: .mediaV1
+    )
+
+    #expect(
+        generateSrt(transcript: transcript, edits: edits, renderPlan: renderPlan)
+            == generateSrt(words: words, totalDuration: 1.5)
+    )
+    #expect(
+        generateSrt(transcript: transcript, edits: edits, renderPlan: renderPlan)
+            .contains("00:00:00,000 --> 00:00:00,850")
+    )
 }

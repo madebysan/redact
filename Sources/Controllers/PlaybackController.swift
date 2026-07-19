@@ -1,139 +1,270 @@
 import AVFoundation
-import AppKit
-import QuartzCore
+import Foundation
 
-/// Manages AVPlayer playback. Uses AVPlayer's own periodic time observer for the
-/// 30Hz "skip deleted ranges + fade audio + highlight current word" loop, so we
-/// don't need to babysit a CVDisplayLink.
-class PlaybackController {
+struct PlaybackPosition: Equatable, Sendable {
+    let sourceTime: Double
+    let editedTime: Double
+    let editedDuration: Double
+}
+
+/// Owns edited preview playback and maps its compact timeline back to source words.
+@MainActor
+final class PlaybackController {
     let player = AVPlayer()
 
-    var onTimeUpdate: ((Double) -> Void)?
+    var onPositionUpdate: ((PlaybackPosition) -> Void)?
     var onHighlightWord: ((String?) -> Void)?
     var onPlayingChanged: ((Bool) -> Void)?
+    var onPreviewError: ((String) -> Void)?
+    var onPreviewInstalled: ((TimelineMap) -> Void)?
 
+    private let compositionBuilder: any PreviewCompositionBuilding
+    private let debounceNanoseconds: UInt64
     private var timeObserverToken: Any?
-    private var isSeeking = false
-    private var fadeInStart: CFTimeInterval = 0
+    private var previewBuildTask: Task<Void, Never>?
+    private var previewGeneration = UUID()
+    private var sourceURL: URL?
     private var allWords: [Word] = []
-    private var deletedRanges: [TimeRange] = []
+    private var activeTimelineMap = TimelineMap(keptRanges: [])
+    private var preferredRate: Float = 1
+    private var isPreviewUpdating = false
+    private var playWhenPreviewInstalls = false
 
-    private var fadeSec: Double { Settings.shared.crossfadeSec }
-
-    init() {
+    init(
+        compositionBuilder: any PreviewCompositionBuilding = AVPreviewCompositionBuilder(),
+        debounceNanoseconds: UInt64 = 150_000_000
+    ) {
+        self.compositionBuilder = compositionBuilder
+        self.debounceNanoseconds = debounceNanoseconds
         setupPeriodicObserver()
     }
 
     deinit {
+        previewBuildTask?.cancel()
         if let timeObserverToken {
             player.removeTimeObserver(timeObserverToken)
         }
     }
 
-    // MARK: - Public API
+    // MARK: - Project lifecycle
 
-    func loadMedia(url: URL) {
-        let item = AVPlayerItem(url: url)
-        player.replaceCurrentItem(with: item)
-    }
-
-    func updateWords(_ words: [Word]) {
+    func loadMedia(url: URL, words: [Word], renderPlan: RenderPlan) {
+        sourceURL = url
         allWords = words
-        deletedRanges = buildDeletedRanges(words)
+        schedulePreview(renderPlan: renderPlan, debounce: false)
     }
+
+    func updateEditState(words: [Word], renderPlan: RenderPlan) {
+        allWords = words
+        schedulePreview(renderPlan: renderPlan, debounce: true)
+    }
+
+    func close() {
+        previewBuildTask?.cancel()
+        previewBuildTask = nil
+        previewGeneration = UUID()
+        sourceURL = nil
+        allWords = []
+        activeTimelineMap = TimelineMap(keptRanges: [])
+        isPreviewUpdating = false
+        playWhenPreviewInstalls = false
+        player.pause()
+        player.replaceCurrentItem(with: nil)
+        onPositionUpdate = nil
+        onHighlightWord = nil
+        onPlayingChanged = nil
+        onPreviewError = nil
+        onPreviewInstalled = nil
+    }
+
+    // MARK: - Transport
 
     func togglePlayPause() {
+        if isPreviewUpdating {
+            playWhenPreviewInstalls.toggle()
+            return
+        }
         if player.timeControlStatus == .playing {
             player.pause()
             onPlayingChanged?(false)
         } else {
-            player.play()
+            player.playImmediately(atRate: preferredRate)
             onPlayingChanged?(true)
         }
     }
 
-    func seekToWord(start: Double) {
-        let time = CMTime(seconds: start, preferredTimescale: 600)
+    func seekToSourceTime(_ sourceTime: Double) {
+        seekToEditedTime(activeTimelineMap.editedTime(forSourceTime: sourceTime))
+    }
+
+    func seekToEditedTime(_ editedTime: Double) {
+        let clampedTime = max(0, min(activeTimelineMap.editedDuration, editedTime))
+        let time = CMTime(seconds: clampedTime, preferredTimescale: 600)
         player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
-        onTimeUpdate?(start)
+        publishPosition(editedTime: clampedTime)
     }
 
     func skip(seconds: Double) {
-        guard let duration = player.currentItem?.duration.seconds, duration.isFinite else { return }
         let current = player.currentTime().seconds
-        let target = max(0, min(duration, current + seconds))
-        let time = CMTime(seconds: target, preferredTimescale: 600)
-        player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
+        guard current.isFinite else { return }
+        seekToEditedTime(current + seconds)
     }
 
     func setRate(_ rate: Float) {
-        player.rate = rate
+        preferredRate = rate
+        if player.timeControlStatus == .playing {
+            player.rate = rate
+        }
     }
 
-    // MARK: - Observer
+    func setVolume(_ volume: Float) {
+        player.volume = min(1, max(0, volume))
+    }
+
+    func setMuted(_ muted: Bool) {
+        player.isMuted = muted
+    }
+
+    func toggleMuted() -> Bool {
+        player.isMuted.toggle()
+        return player.isMuted
+    }
+
+    // MARK: - Composition rebuild
+
+    private func schedulePreview(renderPlan: RenderPlan, debounce: Bool) {
+        previewBuildTask?.cancel()
+        let generation = UUID()
+        previewGeneration = generation
+        guard let sourceURL else { return }
+
+        if player.rate != 0 || player.timeControlStatus == .playing {
+            playWhenPreviewInstalls = true
+            player.pause()
+            onPlayingChanged?(false)
+        }
+        isPreviewUpdating = true
+
+        let builder = compositionBuilder
+        let delay = debounce ? debounceNanoseconds : 0
+        previewBuildTask = Task { [weak self] in
+            do {
+                if delay > 0 {
+                    try await Task.sleep(nanoseconds: delay)
+                }
+                try Task.checkCancellation()
+
+                if renderPlan.keptRanges.isEmpty {
+                    self?.installPreview(
+                        item: nil,
+                        renderPlan: renderPlan,
+                        generation: generation
+                    )
+                    return
+                }
+
+                if renderPlan.deletedRanges.isEmpty {
+                    self?.installPreview(
+                        item: AVPlayerItem(url: sourceURL),
+                        renderPlan: renderPlan,
+                        generation: generation
+                    )
+                    return
+                }
+
+                let prepared = try await builder.build(
+                    sourceURL: sourceURL,
+                    keptRanges: renderPlan.keptRanges
+                )
+                try Task.checkCancellation()
+                self?.installPreview(
+                    item: AVPlayerItem(asset: prepared.asset),
+                    renderPlan: renderPlan,
+                    generation: generation
+                )
+            } catch is CancellationError {
+                return
+            } catch {
+                guard self?.previewGeneration == generation else { return }
+                self?.isPreviewUpdating = false
+                self?.playWhenPreviewInstalls = false
+                self?.onPlayingChanged?(false)
+                self?.onPreviewError?(error.localizedDescription)
+            }
+        }
+    }
+
+    private func installPreview(
+        item: AVPlayerItem?,
+        renderPlan: RenderPlan,
+        generation: UUID
+    ) {
+        guard previewGeneration == generation else { return }
+
+        let currentEditedTime = player.currentTime().seconds
+        let sourceTime = currentEditedTime.isFinite
+            ? activeTimelineMap.sourceTime(forEditedTime: currentEditedTime)
+            : 0
+        let shouldPlay = playWhenPreviewInstalls
+            || player.rate != 0
+            || player.timeControlStatus == .playing
+
+        player.pause()
+        player.replaceCurrentItem(with: item)
+        activeTimelineMap = renderPlan.timelineMap
+        isPreviewUpdating = false
+        playWhenPreviewInstalls = false
+
+        let newEditedTime = activeTimelineMap.editedTime(forSourceTime: sourceTime)
+        let target = CMTime(seconds: newEditedTime, preferredTimescale: 600)
+        player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
+
+        if shouldPlay, item != nil {
+            player.playImmediately(atRate: preferredRate)
+        }
+        onPlayingChanged?(shouldPlay && item != nil)
+        onPreviewInstalled?(activeTimelineMap)
+        publishPosition(editedTime: newEditedTime)
+    }
+
+    // MARK: - Periodic updates
 
     private func setupPeriodicObserver() {
-        // 30Hz is plenty for the skip-over-deleted-range check and visibly smooth
-        // for cursor movement. Observer only fires during playback, after seeks,
-        // and on rate changes — no work wasted while paused.
         let interval = CMTime(seconds: 1.0 / 30.0, preferredTimescale: 600)
         timeObserverToken = player.addPeriodicTimeObserver(
             forInterval: interval,
             queue: .main
         ) { [weak self] _ in
-            self?.tick()
+            MainActor.assumeIsolated {
+                self?.tick()
+            }
         }
     }
 
     private func tick() {
-        guard player.timeControlStatus == .playing, !isSeeking else { return }
+        guard player.timeControlStatus == .playing else { return }
+        let editedTime = player.currentTime().seconds
+        guard editedTime.isFinite else { return }
+        publishPosition(editedTime: editedTime)
+    }
 
-        let time = player.currentTime().seconds
-        guard time.isFinite else { return }
+    private func publishPosition(editedTime: Double) {
+        let sourceTime = activeTimelineMap.sourceTime(forEditedTime: editedTime)
+        onPositionUpdate?(
+            PlaybackPosition(
+                sourceTime: sourceTime,
+                editedTime: editedTime,
+                editedDuration: activeTimelineMap.editedDuration
+            )
+        )
 
-        // Inside a deleted range → mute and skip past.
-        if let deletedRange = findDeletedRange(time: time, deletedRanges: deletedRanges) {
-            player.volume = 0
-            isSeeking = true
-            let target = CMTime(seconds: deletedRange.end + 0.01, preferredTimescale: 600)
-            player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
-                guard let self, finished else { return }
-                DispatchQueue.main.async {
-                    self.isSeeking = false
-                    self.player.volume = 0
-                    self.fadeInStart = CACurrentMediaTime()
-                }
-            }
-            return
-        }
-
-        onTimeUpdate?(time)
-
-        // Fade-in after a skip.
-        if fadeInStart > 0 {
-            let elapsed = CACurrentMediaTime() - fadeInStart
-            if elapsed < fadeSec {
-                player.volume = Float(elapsed / fadeSec)
-            } else {
-                player.volume = 1
-                fadeInStart = 0
-            }
-        }
-
-        // Fade-out approaching next deleted range.
-        if fadeInStart == 0 {
-            if let nextStart = findNextDeletedStart(time: time, deletedRanges: deletedRanges) {
-                let dist = nextStart - time
-                if dist < fadeSec && dist > 0 {
-                    player.volume = Float(dist / fadeSec)
-                } else if dist >= fadeSec {
-                    player.volume = 1
-                }
-            }
-        }
-
-        if let word = findWordAtTime(allWords, time: time), !word.deleted, !word.isActualSilence {
-            onHighlightWord?(word.id)
+        let highlightedWord = findWordAtTime(allWords, time: sourceTime)
+        if let highlightedWord,
+           !highlightedWord.deleted,
+           !highlightedWord.isActualSilence {
+            onHighlightWord?(highlightedWord.id)
+        } else {
+            onHighlightWord?(nil)
         }
     }
 }

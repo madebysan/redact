@@ -1,9 +1,10 @@
 import AppKit
 import WhisperKit
 
-/// Preferences window with card-based layout grouped into rounded-rect sections.
-class SettingsWindowController: NSWindowController {
+/// Settings window with card-based layout grouped into rounded-rect sections.
+final class SettingsWindowController: NSWindowController {
     private static var shared: SettingsWindowController?
+    private var keyEventMonitor: Any?
 
     static func show() {
         if let existing = shared {
@@ -17,23 +18,20 @@ class SettingsWindowController: NSWindowController {
 
     convenience init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 440, height: 500),
+            contentRect: NSRect(x: 0, y: 0, width: 500, height: 560),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
         )
-        window.title = "Preferences"
+        window.title = "Settings"
         window.isReleasedWhenClosed = false
         window.backgroundColor = Theme.surface0
-        window.setFrameAutosaveName("SettingsWindow")
-        if !window.setFrameUsingName("SettingsWindow") {
-            window.center()
-        }
+        window.center()
 
         self.init(window: window)
 
         // Escape key closes the window
-        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak window] event in
+        keyEventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak window] event in
             if event.keyCode == 53, event.window == window {
                 window?.close()
                 return nil
@@ -61,27 +59,17 @@ class SettingsWindowController: NSWindowController {
         window.contentView = scrollView
     }
 
+    deinit {
+        if let keyEventMonitor {
+            NSEvent.removeMonitor(keyEventMonitor)
+        }
+    }
+
     override func close() {
         super.close()
         SettingsWindowController.shared = nil
     }
 }
-
-// MARK: - Curated Font List
-
-private let curatedFonts: [(name: String, label: String)] = [
-    ("System", "System Default"),
-    ("Georgia", "Georgia"),
-    ("Helvetica Neue", "Helvetica Neue"),
-    ("Times New Roman", "Times New Roman"),
-    ("Menlo", "Menlo"),
-    ("SF Mono", "SF Mono"),
-    ("Avenir Next", "Avenir Next"),
-    ("Charter", "Charter"),
-    ("Palatino", "Palatino"),
-    ("Baskerville", "Baskerville"),
-    ("American Typewriter", "American Typewriter"),
-]
 
 // MARK: - Highlight Color Options
 
@@ -100,24 +88,22 @@ private let highlightColors: [ColorOption] = [
 // MARK: - Content View
 
 private class SettingsContentView: NSView {
-    private let themeControl = NSSegmentedControl()
     private let fontPopup = NSPopUpButton()
-    private let fontSizeStepper = NSStepper()
-    private let fontSizeLabel = NSTextField(labelWithString: "15")
+    private let fontSizeSlider = NSSlider()
+    private let fontSizeLabel = NSTextField(labelWithString: "15 pt")
+    private let letterSpacingSlider = NSSlider()
+    private let letterSpacingLabel = NSTextField(labelWithString: "0.0 pt")
+    private let lineSpacingSlider = NSSlider()
+    private let lineSpacingLabel = NSTextField(labelWithString: "10 pt")
+    private let typographyPreviewLabel = NSTextField(wrappingLabelWithString: "")
+    private let restoreTranscriptDefaultsButton = NSButton()
     private var colorButtons: [NSButton] = []
-    private let crossfadeSlider = NSSlider()
-    private let crossfadeValueLabel = NSTextField(labelWithString: "70 ms")
     private let modelPopup = NSPopUpButton()
     private let modelStatusLabel = NSTextField(labelWithString: "")
     private let modelActionButton = NSButton()
     private var isModelDownloaded = false
 
-    // ElevenLabs
-    private let elevenLabsApiKeyField = NSSecureTextField()
-    private let elevenLabsVoicePopup = NSPopUpButton()
-    private let elevenLabsCustomVoiceField = NSTextField()
-
-    // Theme-sensitive views for updating on theme change
+    // Layer-backed views that refresh when AppKit updates appearance.
     private var cardViews: [NSView] = []
     private var separatorViews: [NSView] = []
     private var rowLabels: [NSTextField] = []
@@ -148,11 +134,8 @@ private class SettingsContentView: NSView {
 
     private func setup() {
         let sections = [
-            buildSection("Appearance", card: buildAppearanceCard()),
             buildSection("Transcript", card: buildTranscriptCard()),
-            buildSection("Audio", card: buildAudioCard()),
             buildSection("Transcription", card: buildTranscriptionCard()),
-            buildSection("ElevenLabs Voice", card: buildElevenLabsCard()),
         ]
 
         var prev: NSView?
@@ -312,45 +295,47 @@ private class SettingsContentView: NSView {
 
     // MARK: - Card Content Builders
 
-    private func buildAppearanceCard() -> NSView {
-        themeControl.segmentCount = 3
-        themeControl.setLabel("Dark", forSegment: 0)
-        themeControl.setLabel("Light", forSegment: 1)
-        themeControl.setLabel("System", forSegment: 2)
-        themeControl.segmentStyle = .rounded
-        themeControl.target = self
-        themeControl.action = #selector(themeChanged)
-
-        return buildCard([
-            buildRow(label: "Theme", control: themeControl),
-        ])
-    }
-
     private func buildTranscriptCard() -> NSView {
-        // Font popup
         fontPopup.removeAllItems()
-        for font in curatedFonts {
-            fontPopup.addItem(withTitle: font.label)
-            fontPopup.lastItem?.representedObject = font.name
+        for option in Settings.transcriptFontOptions {
+            fontPopup.addItem(withTitle: option.label)
+            fontPopup.lastItem?.representedObject = option.fontFamily
         }
+        fontPopup.setAccessibilityLabel("Transcript font")
         fontPopup.target = self
         fontPopup.action = #selector(fontFamilyChanged)
 
-        // Font size controls
-        fontSizeLabel.font = .monospacedDigitSystemFont(ofSize: 13, weight: .regular)
+        configureSlider(
+            fontSizeSlider,
+            range: 10...24,
+            tickCount: 15,
+            action: #selector(fontSizeChanged)
+        )
+        configureSlider(
+            letterSpacingSlider,
+            range: -0.5...1,
+            tickCount: 16,
+            action: #selector(letterSpacingChanged)
+        )
+        configureSlider(
+            lineSpacingSlider,
+            range: 4...18,
+            tickCount: 15,
+            action: #selector(lineSpacingChanged)
+        )
 
-        let ptLabel = NSTextField(labelWithString: "pt")
-        ptLabel.font = .systemFont(ofSize: 13)
+        let sizeControl = buildSliderControl(fontSizeSlider, valueLabel: fontSizeLabel)
+        let trackingControl = buildSliderControl(letterSpacingSlider, valueLabel: letterSpacingLabel)
+        let lineControl = buildSliderControl(lineSpacingSlider, valueLabel: lineSpacingLabel)
+        let preview = buildTypographyPreview()
 
-        fontSizeStepper.minValue = 10
-        fontSizeStepper.maxValue = 24
-        fontSizeStepper.increment = 1
-        fontSizeStepper.valueWraps = false
-        fontSizeStepper.target = self
-        fontSizeStepper.action = #selector(fontSizeChanged)
-
-        let sizeStack = NSStackView(views: [fontSizeLabel, ptLabel, fontSizeStepper])
-        sizeStack.spacing = 4
+        restoreTranscriptDefaultsButton.title = "Restore Defaults"
+        restoreTranscriptDefaultsButton.bezelStyle = .rounded
+        restoreTranscriptDefaultsButton.controlSize = .small
+        restoreTranscriptDefaultsButton.target = self
+        restoreTranscriptDefaultsButton.action = #selector(restoreTranscriptDefaults)
+        restoreTranscriptDefaultsButton.setAccessibilityLabel("Restore transcript defaults")
+        restoreTranscriptDefaultsButton.toolTip = "Restore transcript font, spacing, and highlight color"
 
         // Highlight color circles
         let colorStack = NSStackView()
@@ -370,38 +355,79 @@ private class SettingsContentView: NSView {
         return buildCard([
             buildRow(label: "Font", control: fontPopup),
             buildSeparator(),
-            buildRow(label: "Size", control: sizeStack),
+            buildRow(label: "Text size", control: sizeControl),
+            buildSeparator(),
+            buildRow(label: "Letter spacing", control: trackingControl),
+            buildSeparator(),
+            buildRow(label: "Line spacing", control: lineControl),
+            buildSeparator(),
+            preview,
             buildSeparator(),
             buildRow(label: "Highlight", control: colorStack),
+            buildSeparator(),
+            buildRow(label: "Defaults", control: restoreTranscriptDefaultsButton),
         ])
     }
 
-    private func buildAudioCard() -> NSView {
-        crossfadeSlider.minValue = 10
-        crossfadeSlider.maxValue = 500
-        crossfadeSlider.target = self
-        crossfadeSlider.action = #selector(crossfadeChanged)
-        crossfadeSlider.translatesAutoresizingMaskIntoConstraints = false
-        crossfadeSlider.widthAnchor.constraint(equalToConstant: 180).isActive = true
+    private func configureSlider(
+        _ slider: NSSlider,
+        range: ClosedRange<Double>,
+        tickCount: Int,
+        action: Selector
+    ) {
+        slider.minValue = range.lowerBound
+        slider.maxValue = range.upperBound
+        slider.numberOfTickMarks = tickCount
+        slider.allowsTickMarkValuesOnly = true
+        slider.isContinuous = true
+        slider.controlSize = .small
+        slider.target = self
+        slider.action = action
+    }
 
-        crossfadeValueLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
-        crossfadeValueLabel.textColor = Theme.textSecondary
+    private func buildSliderControl(_ slider: NSSlider, valueLabel: NSTextField) -> NSView {
+        valueLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        valueLabel.textColor = Theme.textSecondary
+        valueLabel.alignment = .right
+        valueLabel.translatesAutoresizingMaskIntoConstraints = false
+        valueLabel.widthAnchor.constraint(equalToConstant: 54).isActive = true
 
-        let sliderStack = NSStackView(views: [crossfadeSlider, crossfadeValueLabel])
-        sliderStack.spacing = 8
+        slider.translatesAutoresizingMaskIntoConstraints = false
+        slider.widthAnchor.constraint(equalToConstant: 180).isActive = true
 
-        return buildCard([
-            buildRow(label: "Crossfade", control: sliderStack),
-            buildDescription("Audio fade in/out at cut boundaries to soften jumps between edits."),
+        let stack = NSStackView(views: [slider, valueLabel])
+        stack.orientation = .horizontal
+        stack.alignment = .centerY
+        stack.spacing = 10
+        return stack
+    }
+
+    private func buildTypographyPreview() -> NSView {
+        let container = NSView()
+        container.translatesAutoresizingMaskIntoConstraints = false
+
+        typographyPreviewLabel.maximumNumberOfLines = 0
+        typographyPreviewLabel.lineBreakMode = .byWordWrapping
+        typographyPreviewLabel.setAccessibilityLabel("Transcript typography preview")
+        typographyPreviewLabel.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(typographyPreviewLabel)
+
+        NSLayoutConstraint.activate([
+            typographyPreviewLabel.topAnchor.constraint(equalTo: container.topAnchor, constant: 14),
+            typographyPreviewLabel.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
+            typographyPreviewLabel.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -16),
+            typographyPreviewLabel.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -14),
         ])
+        return container
     }
 
     private func buildTranscriptionCard() -> NSView {
         modelPopup.removeAllItems()
         for model in Settings.availableModels {
-            modelPopup.addItem(withTitle: "\(model.label)  (\(model.size))")
+            modelPopup.addItem(withTitle: model.menuTitle)
             modelPopup.lastItem?.representedObject = model.id
         }
+        modelPopup.setAccessibilityLabel("Transcription model")
         modelPopup.target = self
         modelPopup.action = #selector(modelChanged)
 
@@ -423,7 +449,9 @@ private class SettingsContentView: NSView {
         modelStatusLabel.translatesAutoresizingMaskIntoConstraints = false
         infoView.addSubview(modelStatusLabel)
 
-        let desc = NSTextField(wrappingLabelWithString: "Larger models are more accurate but slower to download and run.")
+        let desc = NSTextField(
+            wrappingLabelWithString: "Small is recommended for most projects. English-only models only transcribe English. Larger models may improve accuracy but use more disk space and run more slowly."
+        )
         desc.font = .systemFont(ofSize: 11)
         desc.textColor = Theme.textTertiary
         desc.translatesAutoresizingMaskIntoConstraints = false
@@ -446,43 +474,13 @@ private class SettingsContentView: NSView {
         ])
     }
 
-    private func buildElevenLabsCard() -> NSView {
-        elevenLabsApiKeyField.placeholderString = "xi-..."
-        elevenLabsApiKeyField.target = self
-        elevenLabsApiKeyField.action = #selector(elevenLabsApiKeyChanged)
-        elevenLabsApiKeyField.translatesAutoresizingMaskIntoConstraints = false
-        elevenLabsApiKeyField.widthAnchor.constraint(equalToConstant: 220).isActive = true
+    // MARK: - Settings reactions
 
-        elevenLabsVoicePopup.removeAllItems()
-        for voice in Settings.popularVoices {
-            elevenLabsVoicePopup.addItem(withTitle: "\(voice.name) — \(voice.description)")
-            elevenLabsVoicePopup.lastItem?.representedObject = voice.id
-        }
-        elevenLabsVoicePopup.target = self
-        elevenLabsVoicePopup.action = #selector(elevenLabsVoiceChanged)
-
-        elevenLabsCustomVoiceField.placeholderString = "Paste a voice ID to override"
-        elevenLabsCustomVoiceField.target = self
-        elevenLabsCustomVoiceField.action = #selector(elevenLabsCustomVoiceChanged)
-        elevenLabsCustomVoiceField.translatesAutoresizingMaskIntoConstraints = false
-        elevenLabsCustomVoiceField.widthAnchor.constraint(equalToConstant: 200).isActive = true
-
-        return buildCard([
-            buildRow(label: "API Key", control: elevenLabsApiKeyField),
-            buildSeparator(),
-            buildRow(label: "Voice", control: elevenLabsVoicePopup),
-            buildSeparator(),
-            buildRow(label: "Custom ID", control: elevenLabsCustomVoiceField),
-            buildDescription("Voice recreation uses ElevenLabs API tokens during export. Custom voice ID overrides the selection above."),
-        ])
-    }
-
-    // MARK: - Appearance + Settings reactions
-
-    /// Fired when user-facing Settings (model pick, theme, fonts) change.
+    /// Fired when user-facing Settings (model pick or typography) change.
     /// Dynamic NSColors handle text + tint auto-updates; we just refresh
-    /// whatever actually depends on the setting value (model download state).
+    /// controls and views whose content depends on the current values.
     @objc private func settingsDidChange() {
+        loadTypographySettings()
         checkModelAvailability()
     }
 
@@ -501,31 +499,10 @@ private class SettingsContentView: NSView {
     private func loadFromSettings() {
         let settings = Settings.shared
 
-        switch settings.theme {
-        case "dark": themeControl.selectedSegment = 0
-        case "light": themeControl.selectedSegment = 1
-        case "system": themeControl.selectedSegment = 2
-        default: themeControl.selectedSegment = 0
-        }
-
-        // Select font
-        let currentFont = settings.transcriptFontFamily
-        for i in 0..<fontPopup.numberOfItems {
-            if let fontName = fontPopup.item(at: i)?.representedObject as? String, fontName == currentFont {
-                fontPopup.selectItem(at: i)
-                break
-            }
-        }
-
-        fontSizeStepper.doubleValue = Double(settings.transcriptFontSize)
-        fontSizeLabel.stringValue = "\(Int(settings.transcriptFontSize))"
+        loadTypographySettings()
 
         // Highlight the selected color circle
         updateColorSelection()
-
-        // Crossfade
-        crossfadeSlider.doubleValue = settings.crossfadeMs
-        crossfadeValueLabel.stringValue = "\(Int(settings.crossfadeMs)) ms"
 
         // Select whisper model
         let currentModel = settings.whisperModel
@@ -536,18 +513,68 @@ private class SettingsContentView: NSView {
             }
         }
 
-        // ElevenLabs
-        elevenLabsApiKeyField.stringValue = settings.elevenLabsApiKey
+    }
 
-        let currentVoiceId = settings.elevenLabsVoiceId
-        for i in 0..<elevenLabsVoicePopup.numberOfItems {
-            if let voiceId = elevenLabsVoicePopup.item(at: i)?.representedObject as? String, voiceId == currentVoiceId {
-                elevenLabsVoicePopup.selectItem(at: i)
+    private func loadTypographySettings() {
+        let settings = Settings.shared
+        for index in 0..<fontPopup.numberOfItems {
+            if let family = fontPopup.item(at: index)?.representedObject as? String,
+               family == settings.transcriptFontFamily {
+                fontPopup.selectItem(at: index)
                 break
             }
         }
 
-        elevenLabsCustomVoiceField.stringValue = settings.elevenLabsCustomVoiceId
+        fontSizeSlider.doubleValue = Double(settings.transcriptFontSize)
+        letterSpacingSlider.doubleValue = Double(settings.transcriptLetterSpacing)
+        lineSpacingSlider.doubleValue = Double(settings.transcriptLineSpacing)
+
+        fontSizeLabel.stringValue = "\(Int(settings.transcriptFontSize)) pt"
+        letterSpacingLabel.stringValue = String(
+            format: "%.1f pt",
+            settings.transcriptLetterSpacing
+        )
+        lineSpacingLabel.stringValue = "\(Int(settings.transcriptLineSpacing)) pt"
+        updateTypographyPreview()
+    }
+
+    private func updateTypographyPreview() {
+        let settings = Settings.shared
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.paragraphSpacing = settings.transcriptLineSpacing
+        paragraphStyle.lineSpacing = settings.transcriptLineSpacing * 0.2
+
+        let timestampAttributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedDigitSystemFont(
+                ofSize: max(10, settings.transcriptFontSize - 3),
+                weight: .regular
+            ),
+            .foregroundColor: Theme.textDimmed,
+            .paragraphStyle: paragraphStyle,
+        ]
+        let transcriptAttributes: [NSAttributedString.Key: Any] = [
+            .font: settings.transcriptFont(
+                ofSize: settings.transcriptFontSize,
+                weight: .regular
+            ),
+            .kern: settings.transcriptLetterSpacing,
+            .foregroundColor: Theme.wordNormal,
+            .paragraphStyle: paragraphStyle,
+        ]
+
+        let preview = NSMutableAttributedString()
+        preview.append(NSAttributedString(string: "00:12   ", attributes: timestampAttributes))
+        preview.append(NSAttributedString(
+            string: "Edit the words and shape the story.\n",
+            attributes: transcriptAttributes
+        ))
+        preview.append(NSAttributedString(string: "00:16   ", attributes: timestampAttributes))
+        preview.append(NSAttributedString(
+            string: "Every change stays reversible.",
+            attributes: transcriptAttributes
+        ))
+        typographyPreviewLabel.attributedStringValue = preview
+        typographyPreviewLabel.invalidateIntrinsicContentSize()
     }
 
     private func updateColorSelection() {
@@ -600,23 +627,26 @@ private class SettingsContentView: NSView {
 
     // MARK: - Actions
 
-    @objc private func themeChanged() {
-        let themes = ["dark", "light", "system"]
-        let index = themeControl.selectedSegment
-        if index >= 0 && index < themes.count {
-            Settings.shared.theme = themes[index]
-        }
-    }
-
     @objc private func fontFamilyChanged() {
-        guard let fontName = fontPopup.selectedItem?.representedObject as? String else { return }
-        Settings.shared.transcriptFontFamily = fontName
+        guard let family = fontPopup.selectedItem?.representedObject as? String else { return }
+        Settings.shared.transcriptFontFamily = family
     }
 
     @objc private func fontSizeChanged() {
-        let size = CGFloat(fontSizeStepper.doubleValue)
-        fontSizeLabel.stringValue = "\(Int(size))"
+        let size = CGFloat(fontSizeSlider.doubleValue)
         Settings.shared.transcriptFontSize = size
+    }
+
+    @objc private func letterSpacingChanged() {
+        Settings.shared.transcriptLetterSpacing = CGFloat(letterSpacingSlider.doubleValue)
+    }
+
+    @objc private func lineSpacingChanged() {
+        Settings.shared.transcriptLineSpacing = CGFloat(lineSpacingSlider.doubleValue)
+    }
+
+    @objc private func restoreTranscriptDefaults() {
+        Settings.shared.restoreTranscriptDefaults()
     }
 
     @objc private func colorOptionClicked(_ sender: NSButton) {
@@ -626,31 +656,10 @@ private class SettingsContentView: NSView {
         updateColorSelection()
     }
 
-    @objc private func crossfadeChanged() {
-        let ms = crossfadeSlider.doubleValue
-        crossfadeValueLabel.stringValue = "\(Int(ms)) ms"
-        Settings.shared.crossfadeMs = ms
-    }
-
     @objc private func modelChanged() {
         guard let modelId = modelPopup.selectedItem?.representedObject as? String else { return }
         Settings.shared.whisperModel = modelId
         checkModelAvailability()
-    }
-
-    // MARK: - ElevenLabs Actions
-
-    @objc private func elevenLabsApiKeyChanged() {
-        Settings.shared.elevenLabsApiKey = elevenLabsApiKeyField.stringValue
-    }
-
-    @objc private func elevenLabsVoiceChanged() {
-        guard let voiceId = elevenLabsVoicePopup.selectedItem?.representedObject as? String else { return }
-        Settings.shared.elevenLabsVoiceId = voiceId
-    }
-
-    @objc private func elevenLabsCustomVoiceChanged() {
-        Settings.shared.elevenLabsCustomVoiceId = elevenLabsCustomVoiceField.stringValue
     }
 
     @objc private func modelActionClicked() {

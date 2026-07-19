@@ -6,7 +6,8 @@ xcuserdata/
 DerivedData/
 .DS_Store
 dist/
+work/
+.codex/
 
-# Local-only tracking / reference docs — not for GitHub
-backlog.md
+# Local-only reference docs — not for GitHub
 wiki/

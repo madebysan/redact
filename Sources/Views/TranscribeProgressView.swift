@@ -1,7 +1,6 @@
 import AppKit
 
-/// Shows transcription progress: spinner, status text, cancel button.
-/// Intentionally indeterminate — see AppState.TranscribeProgress.
+/// Shows a quiet, cancellable transcription state without exposing raw model output.
 class TranscribeProgressView: NSView {
     var onCancel: (() -> Void)?
 
@@ -26,30 +25,31 @@ class TranscribeProgressView: NSView {
         spinner.controlSize = .regular
         spinner.startAnimation(nil)
         spinner.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(spinner)
 
         statusLabel.font = .systemFont(ofSize: 16, weight: .medium)
         statusLabel.textColor = Theme.textSecondary
         statusLabel.alignment = .center
-        statusLabel.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(statusLabel)
 
         cancelButton.title = "Cancel"
         cancelButton.bezelStyle = .rounded
         cancelButton.target = self
         cancelButton.action = #selector(cancelClicked)
-        cancelButton.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(cancelButton)
+        let stack = NSStackView(views: [
+            spinner,
+            statusLabel,
+            cancelButton,
+        ])
+        stack.orientation = .vertical
+        stack.alignment = .centerX
+        stack.spacing = 16
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
 
         NSLayoutConstraint.activate([
-            spinner.centerXAnchor.constraint(equalTo: centerXAnchor),
-            spinner.centerYAnchor.constraint(equalTo: centerYAnchor, constant: -32),
-
-            statusLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
-            statusLabel.topAnchor.constraint(equalTo: spinner.bottomAnchor, constant: 16),
-
-            cancelButton.centerXAnchor.constraint(equalTo: centerXAnchor),
-            cancelButton.topAnchor.constraint(equalTo: statusLabel.bottomAnchor, constant: 20),
+            stack.centerXAnchor.constraint(equalTo: centerXAnchor),
+            stack.centerYAnchor.constraint(equalTo: centerYAnchor),
+            stack.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 40),
+            stack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -40),
         ])
     }
 
@@ -58,7 +58,7 @@ class TranscribeProgressView: NSView {
         case .loadingModel:
             statusLabel.stringValue = "Loading model…"
         case .transcribing:
-            statusLabel.stringValue = "Transcribing…"
+            statusLabel.stringValue = progress.message ?? "Transcribing…"
         case .complete:
             statusLabel.stringValue = "Processing transcript…"
         case .error:

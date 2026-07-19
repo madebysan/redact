@@ -3,24 +3,55 @@ import os.log
 
 private let logger = Logger(subsystem: "com.redact.app", category: "FFmpeg")
 
-/// FFmpeg subprocess wrapper for audio extraction and video export.
-class FFmpegService {
-    private var currentProcess: Process?
+private final class ProcessOutputBuffer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var data = Data()
+    private let maximumBytes: Int
 
-    /// Common setup for all FFmpeg/FFprobe processes: redirect stdin to /dev/null.
+    init(maximumBytes: Int = 8_192) {
+        self.maximumBytes = maximumBytes
+    }
+
+    func append(_ newData: Data) {
+        guard !newData.isEmpty else { return }
+        lock.lock()
+        defer { lock.unlock() }
+        data.append(newData)
+        if data.count > maximumBytes {
+            data = data.suffix(maximumBytes)
+        }
+    }
+
+    var text: String {
+        lock.lock()
+        defer { lock.unlock() }
+        let decoded = String(decoding: data, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return decoded
+            .split(separator: "\n")
+            .suffix(6)
+            .map { String($0.suffix(500)) }
+            .joined(separator: "\n")
+    }
+}
+
+/// Stateless FFmpeg subprocess wrapper. Each call owns a separate
+/// `ProcessOperation`, so cancelling one operation cannot terminate another.
+final class FFmpegService: MediaProcessing, @unchecked Sendable {
     private func configureProcess(_ process: Process) {
         process.standardInput = FileHandle.nullDevice
     }
 
-    /// Extract audio from a video file as 16kHz mono WAV (for Whisper).
-    func extractAudio(from inputPath: String, onProgress: ((String) -> Void)? = nil) async throws -> String {
+    func extractAudio(
+        from inputPath: String,
+        outputPath: String,
+        operation: ProcessOperation,
+        onProgress: (@Sendable (String) -> Void)? = nil
+    ) async throws {
         guard let ffmpeg = PathUtilities.findFFmpeg() else {
             throw FFmpegError.ffmpegNotFound
         }
 
-        let outputPath = PathUtilities.tempDir + "/audio.wav"
-
-        // Remove existing file if present
         try? FileManager.default.removeItem(atPath: outputPath)
 
         let process = Process()
@@ -41,48 +72,62 @@ class FFmpegService {
         process.standardError = stderrPipe
         process.standardOutput = FileHandle.nullDevice
 
-        currentProcess = process
-        logger.info("extractAudio: starting — input=\(inputPath) output=\(outputPath)")
+        logger.info("extractAudio: starting")
 
-        return try await withCheckedThrowingContinuation { continuation in
-            // Read stderr for progress in background
-            stderrPipe.fileHandleForReading.readabilityHandler = { handle in
-                let data = handle.availableData
-                if !data.isEmpty, let text = String(data: data, encoding: .utf8) {
-                    // Parse FFmpeg progress: look for "time=HH:MM:SS.ms"
-                    if let range = text.range(of: "time=\\d{2}:\\d{2}:\\d{2}\\.\\d+", options: .regularExpression) {
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                stderrPipe.fileHandleForReading.readabilityHandler = { handle in
+                    let data = handle.availableData
+                    if !data.isEmpty,
+                       let text = String(data: data, encoding: .utf8),
+                       let range = text.range(
+                           of: "time=\\d{2}:\\d{2}:\\d{2}\\.\\d+",
+                           options: .regularExpression
+                       ) {
                         onProgress?(String(text[range]))
                     }
                 }
-            }
 
-            process.terminationHandler = { [weak self] proc in
-                stderrPipe.fileHandleForReading.readabilityHandler = nil
-                self?.currentProcess = nil
-                logger.info("extractAudio: finished with exit code \(proc.terminationStatus)")
+                process.terminationHandler = { completedProcess in
+                    stderrPipe.fileHandleForReading.readabilityHandler = nil
+                    operation.clear(completedProcess)
+                    logger.info(
+                        "extractAudio: finished with exit code \(completedProcess.terminationStatus)"
+                    )
 
-                if proc.terminationStatus == 0 {
-                    continuation.resume(returning: outputPath)
-                } else if proc.terminationStatus == 15 || proc.terminationStatus == 9 {
-                    continuation.resume(throwing: FFmpegError.cancelled)
-                } else {
-                    continuation.resume(throwing: FFmpegError.extractionFailed(proc.terminationStatus))
+                    if completedProcess.terminationStatus == 0 {
+                        continuation.resume()
+                    } else if Self.wasCancelled(completedProcess) || operation.isCancelled {
+                        continuation.resume(throwing: FFmpegError.cancelled)
+                    } else {
+                        continuation.resume(
+                            throwing: FFmpegError.extractionFailed(completedProcess.terminationStatus)
+                        )
+                    }
+                }
+
+                do {
+                    guard try operation.launch(process) else {
+                        continuation.resume(throwing: FFmpegError.cancelled)
+                        return
+                    }
+                    logger.info("extractAudio: process launched")
+                } catch {
+                    operation.clear(process)
+                    continuation.resume(
+                        throwing: FFmpegError.launchFailed(error.localizedDescription)
+                    )
                 }
             }
-
-            do {
-                try process.run()
-                logger.info("extractAudio: process launched (pid \(process.processIdentifier))")
-            } catch {
-                currentProcess = nil
-                logger.error("extractAudio: launch failed — \(error.localizedDescription)")
-                continuation.resume(throwing: FFmpegError.launchFailed(error.localizedDescription))
-            }
+        } onCancel: {
+            operation.cancel()
         }
     }
 
-    /// Get media info using ffprobe.
-    func getMediaInfo(filePath: String) async throws -> MediaInfo {
+    func getMediaInfo(
+        filePath: String,
+        operation: ProcessOperation = ProcessOperation()
+    ) async throws -> MediaInfo {
         guard let ffprobe = PathUtilities.findFFprobe() else {
             throw FFmpegError.ffmpegNotFound
         }
@@ -102,359 +147,354 @@ class FFmpegService {
         process.standardOutput = stdoutPipe
         process.standardError = FileHandle.nullDevice
 
-        logger.info("getMediaInfo: probing \(filePath)")
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                process.terminationHandler = { completedProcess in
+                    operation.clear(completedProcess)
+                    let data = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
 
-        return try await withCheckedThrowingContinuation { continuation in
-            process.terminationHandler = { proc in
-                let data = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+                    guard completedProcess.terminationStatus == 0 else {
+                        let error: FFmpegError = Self.wasCancelled(completedProcess) || operation.isCancelled
+                            ? .cancelled
+                            : .probeError
+                        continuation.resume(throwing: error)
+                        return
+                    }
 
-                if proc.terminationStatus != 0 {
-                    continuation.resume(throwing: FFmpegError.probeError)
-                    return
+                    do {
+                        continuation.resume(returning: try MediaInfo.decodeFFprobeJSON(data))
+                    } catch {
+                        continuation.resume(throwing: FFmpegError.probeError)
+                    }
                 }
 
                 do {
-                    let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-                    let format = json?["format"] as? [String: Any]
-                    let durationStr = format?["duration"] as? String
-                    let duration = durationStr.flatMap(Double.init) ?? 0
-
-                    let streams = json?["streams"] as? [[String: Any]] ?? []
-                    let hasVideo = streams.contains { ($0["codec_type"] as? String) == "video" }
-                    let hasAudio = streams.contains { ($0["codec_type"] as? String) == "audio" }
-
-                    continuation.resume(returning: MediaInfo(
-                        duration: duration,
-                        hasVideo: hasVideo,
-                        hasAudio: hasAudio
-                    ))
+                    guard try operation.launch(process) else {
+                        continuation.resume(throwing: FFmpegError.cancelled)
+                        return
+                    }
                 } catch {
-                    continuation.resume(throwing: FFmpegError.probeError)
+                    operation.clear(process)
+                    continuation.resume(
+                        throwing: FFmpegError.launchFailed(error.localizedDescription)
+                    )
                 }
             }
-
-            do {
-                try process.run()
-            } catch {
-                continuation.resume(throwing: FFmpegError.launchFailed(error.localizedDescription))
-            }
+        } onCancel: {
+            operation.cancel()
         }
     }
 
-    /// Export video with kept segments, using filter graph for frame-accurate cuts.
-    func exportVideo(
+    func exportMedia(
         inputPath: String,
         outputPath: String,
         segments: [TimeRange],
-        format: String = "mp4",
+        preset: ExportPreset,
+        sourceInfo: MediaInfo,
+        sourceIsUnchanged: Bool,
         quality: String? = nil,
-        speed: Double = 1.0,
-        onProgress: ((Double) -> Void)? = nil,
+        speed: Double = 1,
+        enhanceAudio: Bool = false,
+        operation: ProcessOperation,
+        onProgress: (@Sendable (Double) -> Void)? = nil,
         totalDuration: Double = 0
     ) async throws {
         guard let ffmpeg = PathUtilities.findFFmpeg() else {
             throw FFmpegError.ffmpegNotFound
         }
-
         guard !segments.isEmpty else {
             throw FFmpegError.noSegments
         }
 
-        let n = segments.count
-        let segDurations = segments.map { $0.end - $0.start }
-        let minSegDur = segDurations.min() ?? 0
+        let plan = FFmpegExportPlan(
+            inputPath: inputPath,
+            outputPath: outputPath,
+            segments: segments,
+            preset: preset,
+            quality: quality,
+            speed: speed,
+            enhanceAudio: enhanceAudio,
+            sourceInfo: sourceInfo,
+            sourceIsUnchanged: sourceIsUnchanged
+        )
 
-        // Use the user's crossfade setting, clamped to 40% of shortest segment
-        let crossfadeSec = Settings.shared.crossfadeSec
-        let xf = min(crossfadeSec, minSegDur * 0.4)
-        let useSpeed = speed != 1.0
-
-        var filterParts: [String] = []
-
-        // Trim all segments
-        for (i, seg) in segments.enumerated() {
-            let s = String(format: "%.4f", seg.start)
-            let e = String(format: "%.4f", seg.end)
-            filterParts.append("[0:v]trim=start=\(s):end=\(e),setpts=PTS-STARTPTS[v\(i)]")
-            filterParts.append("[0:a]atrim=start=\(s):end=\(e),asetpts=PTS-STARTPTS[a\(i)]")
+        if plan.strategy == .batchedSelectionTranscode {
+            try await exportBatchedSelection(
+                ffmpegPath: ffmpeg,
+                inputPath: inputPath,
+                outputPath: outputPath,
+                segments: segments,
+                preset: preset,
+                sourceInfo: sourceInfo,
+                quality: quality,
+                speed: speed,
+                enhanceAudio: enhanceAudio,
+                operation: operation,
+                onProgress: onProgress,
+                totalDuration: totalDuration
+            )
+            return
         }
 
-        if n == 1 {
-            // Single segment — passthrough or speed adjust
-            if useSpeed {
-                filterParts.append("[v0]setpts=PTS/\(speed)[outv]")
-                filterParts.append("[a0]atempo=\(speed)[outa]")
-            } else {
-                filterParts.append("[v0]null[outv]")
-                filterParts.append("[a0]anull[outa]")
-            }
-        } else if xf >= 0.01 {
-            // Chain xfade for video (true dissolve overlap)
-            let xfStr = String(format: "%.4f", xf)
-            var prevVideo = "v0"
-            var runningDur = segDurations[0]
-            for i in 1..<n {
-                let offset = String(format: "%.4f", max(0, runningDur - xf))
-                let isLast = i == n - 1
-                let label = isLast ? (useSpeed ? "cv" : "outv") : "vx\(i)"
-                filterParts.append("[\(prevVideo)][v\(i)]xfade=transition=fade:duration=\(xfStr):offset=\(offset)[\(label)]")
-                prevVideo = label
-                runningDur += segDurations[i] - xf
-            }
-
-            // Chain acrossfade for audio (true audio overlap)
-            var prevAudio = "a0"
-            for i in 1..<n {
-                let isLast = i == n - 1
-                let label = isLast ? (useSpeed ? "ca" : "outa") : "ax\(i)"
-                filterParts.append("[\(prevAudio)][a\(i)]acrossfade=d=\(xfStr):c1=tri:c2=tri[\(label)]")
-                prevAudio = label
-            }
-
-            if useSpeed {
-                filterParts.append("[cv]setpts=PTS/\(speed)[outv]")
-                filterParts.append("[ca]atempo=\(speed)[outa]")
-            }
-        } else {
-            // Crossfade too small — fall back to hard concat
-            let inputs = (0..<n).map { "[v\($0)][a\($0)]" }.joined()
-            if useSpeed {
-                filterParts.append("\(inputs)concat=n=\(n):v=1:a=1[cv][ca]")
-                filterParts.append("[cv]setpts=PTS/\(speed)[outv]")
-                filterParts.append("[ca]atempo=\(speed)[outa]")
-            } else {
-                filterParts.append("\(inputs)concat=n=\(n):v=1:a=1[outv][outa]")
-            }
-        }
-
-        let filterGraph = filterParts.joined(separator: ";")
-
-        var args: [String] = [
-            "-nostdin",
-            "-i", inputPath,
-            "-filter_complex", filterGraph,
-            "-map", "[outv]",
-            "-map", "[outa]",
-        ]
-
-        // Video encoding settings
-        if quality == "1080p" {
-            args += ["-vf", "scale=-2:1080"]
-        } else if quality == "720p" {
-            args += ["-vf", "scale=-2:720"]
-        }
-        args += ["-c:v", "libx264", "-preset", "fast", "-crf", "18"]
-        args += ["-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart"]
-        args += ["-y", outputPath]
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: ffmpeg)
-        process.arguments = args
-        configureProcess(process)
-
-        let stderrPipe = Pipe()
-        process.standardError = stderrPipe
-        process.standardOutput = FileHandle.nullDevice
-
-        currentProcess = process
-        logger.info("exportVideo: starting — \(segments.count) segments, format=\(format)")
-
-        return try await withCheckedThrowingContinuation { continuation in
-            stderrPipe.fileHandleForReading.readabilityHandler = { handle in
-                let data = handle.availableData
-                if !data.isEmpty, let text = String(data: data, encoding: .utf8) {
-                    // Parse "time=HH:MM:SS.ms" for progress
-                    if let range = text.range(of: "time=(\\d{2}):(\\d{2}):(\\d{2})\\.(\\d+)", options: .regularExpression) {
-                        let timeStr = text[range].dropFirst(5) // Remove "time="
-                        let parts = timeStr.split(separator: ":")
-                        if parts.count >= 3 {
-                            let h = Double(parts[0]) ?? 0
-                            let m = Double(parts[1]) ?? 0
-                            let sAndMs = parts[2].split(separator: ".")
-                            let s = Double(sAndMs[0]) ?? 0
-                            let ms = sAndMs.count > 1 ? (Double(sAndMs[1]) ?? 0) / 100.0 : 0
-                            let currentTime = h * 3600 + m * 60 + s + ms
-                            if totalDuration > 0 {
-                                let percent = min(100, (currentTime / totalDuration) * 100)
-                                onProgress?(percent)
-                            }
-                        }
-                    }
-                }
-            }
-
-            process.terminationHandler = { [weak self] proc in
-                stderrPipe.fileHandleForReading.readabilityHandler = nil
-                self?.currentProcess = nil
-
-                if proc.terminationStatus == 0 {
-                    continuation.resume()
-                } else if proc.terminationStatus == 15 || proc.terminationStatus == 9 {
-                    continuation.resume(throwing: FFmpegError.cancelled)
-                } else {
-                    continuation.resume(throwing: FFmpegError.exportFailed(proc.terminationStatus))
-                }
-            }
-
-            do {
-                try process.run()
-            } catch {
-                currentProcess = nil
-                continuation.resume(throwing: FFmpegError.launchFailed(error.localizedDescription))
-            }
-        }
+        try await executeFFmpeg(
+            ffmpegPath: ffmpeg,
+            arguments: plan.arguments,
+            operation: operation,
+            onProgress: onProgress,
+            totalDuration: totalDuration
+        )
     }
 
-    /// Extract audio from a video file as 44.1kHz mono WAV (for ElevenLabs STS).
-    func extractAudioForSTS(from inputPath: String) async throws -> String {
-        guard let ffmpeg = PathUtilities.findFFmpeg() else {
-            throw FFmpegError.ffmpegNotFound
-        }
-
-        let outputPath = PathUtilities.tempDir + "/temp_audio.wav"
-        try? FileManager.default.removeItem(atPath: outputPath)
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: ffmpeg)
-        process.arguments = [
-            "-nostdin",
-            "-i", inputPath,
-            "-vn",
-            "-acodec", "pcm_s16le",
-            "-ar", "44100",
-            "-ac", "1",
-            "-y",
-            outputPath,
-        ]
-        configureProcess(process)
-
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-
-        currentProcess = process
-        logger.info("extractAudioForSTS: starting — input=\(inputPath)")
-
-        return try await withCheckedThrowingContinuation { continuation in
-            process.terminationHandler = { [weak self] proc in
-                self?.currentProcess = nil
-                logger.info("extractAudioForSTS: finished with exit code \(proc.terminationStatus)")
-                if proc.terminationStatus == 0 {
-                    continuation.resume(returning: outputPath)
-                } else if proc.terminationStatus == 15 || proc.terminationStatus == 9 {
-                    continuation.resume(throwing: FFmpegError.cancelled)
-                } else {
-                    continuation.resume(throwing: FFmpegError.extractionFailed(proc.terminationStatus))
-                }
-            }
-
-            do {
-                try process.run()
-            } catch {
-                currentProcess = nil
-                continuation.resume(throwing: FFmpegError.launchFailed(error.localizedDescription))
-            }
-        }
-    }
-
-    /// Replace the audio track in a video with a different audio file.
-    /// Copies the video stream (no re-encoding) and maps the new audio.
-    func replaceAudio(
-        videoPath: String,
-        audioPath: String,
+    private func exportBatchedSelection(
+        ffmpegPath: String,
+        inputPath: String,
         outputPath: String,
-        onProgress: ((Double) -> Void)? = nil,
-        totalDuration: Double = 0
+        segments: [TimeRange],
+        preset: ExportPreset,
+        sourceInfo: MediaInfo,
+        quality: String?,
+        speed: Double,
+        enhanceAudio: Bool,
+        operation: ProcessOperation,
+        onProgress: (@Sendable (Double) -> Void)?,
+        totalDuration: Double
     ) async throws {
-        guard let ffmpeg = PathUtilities.findFFmpeg() else {
-            throw FFmpegError.ffmpegNotFound
+        let workspaceRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("redact-export-batches", isDirectory: true)
+        let workspace = try TemporaryWorkspace.create(in: workspaceRoot)
+        defer { try? workspace.cleanup() }
+
+        let measuredDuration = segments.reduce(0) { $0 + $1.duration }
+        let overallDuration = totalDuration > 0 ? totalDuration : measuredDuration
+        var completedDuration = 0.0
+        var batchArtifacts: [(url: URL, duration: Double)] = []
+
+        let maximumBatchSize = FFmpegExportPlan.selectionFilterMaximumRangeCount
+        let batchTotal = (segments.count + maximumBatchSize - 1) / maximumBatchSize
+        let baseBatchSize = segments.count / batchTotal
+        let largerBatchCount = segments.count % batchTotal
+        let intermediatePreset = ExportPreset(
+            id: "batch-intermediate",
+            title: "Private batch intermediate",
+            pathExtension: "mkv",
+            mediaKind: .video,
+            videoCodec: preset.videoCodec,
+            audioCodec: "pcm_s16le"
+        )
+        var batchStart = 0
+        for batchIndex in 0..<batchTotal {
+            guard !Task.isCancelled, !operation.isCancelled else {
+                throw FFmpegError.cancelled
+            }
+            let batchCount = baseBatchSize + (batchIndex < largerBatchCount ? 1 : 0)
+            let batchEnd = batchStart + batchCount
+            let batch = Array(segments[batchStart..<batchEnd])
+            guard let first = batch.first, let last = batch.last else {
+                throw FFmpegError.noSegments
+            }
+
+            let sourceOffset = first.start
+            let inputDuration = last.end - sourceOffset
+            let sourceBatchDuration = batch.reduce(0) { $0 + $1.duration }
+            let batchDuration = sourceBatchDuration / speed
+            let batchURL = try workspace.fileURL(
+                named: "batch-\(batchArtifacts.count).mkv"
+            )
+            let batchPlan = FFmpegExportPlan(
+                inputPath: inputPath,
+                outputPath: batchURL.path,
+                segments: batch,
+                preset: intermediatePreset,
+                quality: quality,
+                speed: speed,
+                enhanceAudio: false,
+                sourceInfo: sourceInfo,
+                sourceIsUnchanged: false,
+                inputSeek: sourceOffset,
+                inputDuration: inputDuration
+            )
+            guard batchPlan.strategy == .selectionFilterTranscode else {
+                throw FFmpegError.exportFailed(1, "Could not create a bounded export batch")
+            }
+
+            let completedBeforeBatch = completedDuration
+            try await executeFFmpeg(
+                ffmpegPath: ffmpegPath,
+                arguments: batchPlan.arguments,
+                operation: operation,
+                onProgress: { progress in
+                    guard overallDuration > 0 else { return }
+                    let completed = completedBeforeBatch + batchDuration * progress / 100
+                    onProgress?(min(100, completed / overallDuration * 100))
+                },
+                totalDuration: batchDuration
+            )
+            completedDuration += batchDuration
+            batchArtifacts.append((url: batchURL, duration: batchDuration))
+            batchStart = batchEnd
         }
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: ffmpeg)
-        process.arguments = [
+        let manifestURL = try workspace.fileURL(named: "concat.txt")
+        let manifest = batchArtifacts
+            .map {
+                "file '\($0.url.path)'\nduration \(String(format: "%.6f", $0.duration))"
+            }
+            .joined(separator: "\n") + "\n"
+        try Data(manifest.utf8).write(to: manifestURL, options: .atomic)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: manifestURL.path
+        )
+
+        let concatArguments = Self.batchedConcatArguments(
+            manifestPath: manifestURL.path,
+            outputPath: outputPath,
+            preset: preset,
+            enhanceAudio: enhanceAudio,
+            expectedDuration: overallDuration
+        )
+        try await executeFFmpeg(
+            ffmpegPath: ffmpegPath,
+            arguments: concatArguments,
+            operation: operation,
+            onProgress: nil,
+            totalDuration: 0
+        )
+        onProgress?(100)
+    }
+
+    static func batchedConcatArguments(
+        manifestPath: String,
+        outputPath: String,
+        preset: ExportPreset,
+        enhanceAudio: Bool,
+        expectedDuration: Double
+    ) -> [String] {
+        var arguments = [
             "-nostdin",
-            "-i", videoPath,
-            "-i", audioPath,
+            "-f", "concat",
+            "-safe", "0",
+            "-i", manifestPath,
             "-c:v", "copy",
-            "-map", "0:v:0",
-            "-map", "1:a:0",
-            "-shortest",
-            "-y",
-            outputPath,
+            "-c:a", preset.audioCodec,
         ]
+        if enhanceAudio {
+            arguments += ["-af", FFmpegExportPlan.lightAudioEnhancementFilter]
+        }
+        if preset.audioCodec != "pcm_s16le" {
+            arguments += ["-b:a", "192k"]
+        }
+        if preset.pathExtension == "mp4" || preset.pathExtension == "m4a" {
+            arguments += ["-movflags", "+faststart"]
+        }
+        arguments += ["-t", String(format: "%.6f", expectedDuration)]
+        arguments += ["-y", outputPath]
+        return arguments
+    }
+
+    private func executeFFmpeg(
+        ffmpegPath: String,
+        arguments: [String],
+        operation: ProcessOperation,
+        onProgress: (@Sendable (Double) -> Void)?,
+        totalDuration: Double
+    ) async throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: ffmpegPath)
+        process.arguments = arguments
         configureProcess(process)
 
         let stderrPipe = Pipe()
+        let errorBuffer = ProcessOutputBuffer()
         process.standardError = stderrPipe
         process.standardOutput = FileHandle.nullDevice
 
-        currentProcess = process
-        logger.info("replaceAudio: starting — video=\(videoPath) audio=\(audioPath)")
+        logger.info("exportMedia: starting FFmpeg process")
 
-        return try await withCheckedThrowingContinuation { continuation in
-            stderrPipe.fileHandleForReading.readabilityHandler = { handle in
-                let data = handle.availableData
-                if !data.isEmpty, let text = String(data: data, encoding: .utf8) {
-                    if let range = text.range(of: "time=(\\d{2}):(\\d{2}):(\\d{2})\\.(\\d+)", options: .regularExpression) {
-                        let timeStr = text[range].dropFirst(5)
-                        let parts = timeStr.split(separator: ":")
-                        if parts.count >= 3 {
-                            let h = Double(parts[0]) ?? 0
-                            let m = Double(parts[1]) ?? 0
-                            let sAndMs = parts[2].split(separator: ".")
-                            let s = Double(sAndMs[0]) ?? 0
-                            let ms = sAndMs.count > 1 ? (Double(sAndMs[1]) ?? 0) / 100.0 : 0
-                            let currentTime = h * 3600 + m * 60 + s + ms
-                            if totalDuration > 0 {
-                                let percent = min(100, (currentTime / totalDuration) * 100)
-                                onProgress?(percent)
-                            }
-                        }
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                stderrPipe.fileHandleForReading.readabilityHandler = { handle in
+                    let data = handle.availableData
+                    errorBuffer.append(data)
+                    guard !data.isEmpty,
+                          let text = String(data: data, encoding: .utf8),
+                          let time = Self.parseProgressTime(text),
+                          totalDuration > 0 else {
+                        return
+                    }
+                    onProgress?(min(100, (time / totalDuration) * 100))
+                }
+
+                process.terminationHandler = { completedProcess in
+                    stderrPipe.fileHandleForReading.readabilityHandler = nil
+                    errorBuffer.append(stderrPipe.fileHandleForReading.readDataToEndOfFile())
+                    operation.clear(completedProcess)
+
+                    if completedProcess.terminationStatus == 0 {
+                        continuation.resume()
+                    } else if Self.wasCancelled(completedProcess) || operation.isCancelled {
+                        continuation.resume(throwing: FFmpegError.cancelled)
+                    } else {
+                        continuation.resume(
+                            throwing: FFmpegError.exportFailed(
+                                completedProcess.terminationStatus,
+                                errorBuffer.text
+                            )
+                        )
                     }
                 }
-            }
 
-            process.terminationHandler = { [weak self] proc in
-                stderrPipe.fileHandleForReading.readabilityHandler = nil
-                self?.currentProcess = nil
-
-                if proc.terminationStatus == 0 {
-                    continuation.resume()
-                } else if proc.terminationStatus == 15 || proc.terminationStatus == 9 {
-                    continuation.resume(throwing: FFmpegError.cancelled)
-                } else {
-                    continuation.resume(throwing: FFmpegError.exportFailed(proc.terminationStatus))
+                do {
+                    guard try operation.launch(process) else {
+                        continuation.resume(throwing: FFmpegError.cancelled)
+                        return
+                    }
+                } catch {
+                    operation.clear(process)
+                    continuation.resume(
+                        throwing: FFmpegError.launchFailed(error.localizedDescription)
+                    )
                 }
             }
-
-            do {
-                try process.run()
-            } catch {
-                currentProcess = nil
-                continuation.resume(throwing: FFmpegError.launchFailed(error.localizedDescription))
-            }
+        } onCancel: {
+            operation.cancel()
         }
     }
 
-    /// Cancel any running FFmpeg process.
-    func cancel() {
-        currentProcess?.terminate()
-        currentProcess = nil
+    private static func wasCancelled(_ process: Process) -> Bool {
+        process.terminationStatus == 15 || process.terminationStatus == 9
+    }
+
+    private static func parseProgressTime(_ text: String) -> Double? {
+        guard let range = text.range(
+            of: "time=(\\d{2}):(\\d{2}):(\\d{2})\\.(\\d+)",
+            options: .regularExpression
+        ) else {
+            return nil
+        }
+
+        let components = text[range].dropFirst(5).split(separator: ":")
+        guard components.count == 3,
+              let hours = Double(components[0]),
+              let minutes = Double(components[1]) else {
+            return nil
+        }
+
+        let secondComponents = components[2].split(separator: ".", maxSplits: 1)
+        guard let seconds = secondComponents.first.flatMap({ Double($0) }) else {
+            return nil
+        }
+        let fraction = secondComponents.count == 2
+            ? Double("0." + secondComponents[1]) ?? 0
+            : 0
+        return hours * 3600 + minutes * 60 + seconds + fraction
     }
 }
 
-// MARK: - Types
-
-struct MediaInfo {
-    let duration: Double
-    let hasVideo: Bool
-    let hasAudio: Bool
-}
-
-enum FFmpegError: LocalizedError {
+enum FFmpegError: LocalizedError, Equatable {
     case ffmpegNotFound
     case extractionFailed(Int32)
-    case exportFailed(Int32)
+    case exportFailed(Int32, String)
     case launchFailed(String)
     case cancelled
     case probeError
@@ -466,10 +506,11 @@ enum FFmpegError: LocalizedError {
             return "FFmpeg not found. Install it via Homebrew: brew install ffmpeg"
         case .extractionFailed(let code):
             return "Audio extraction failed (exit code \(code))"
-        case .exportFailed(let code):
-            return "Video export failed (exit code \(code))"
-        case .launchFailed(let msg):
-            return "Failed to launch FFmpeg: \(msg)"
+        case .exportFailed(let code, let details):
+            let suffix = details.isEmpty ? "" : "\n\n" + details
+            return "Media export failed (exit code \(code))" + suffix
+        case .launchFailed(let message):
+            return "Failed to launch FFmpeg: \(message)"
         case .cancelled:
             return "Operation cancelled"
         case .probeError:

@@ -1,7 +1,16 @@
 import AppKit
+import UniformTypeIdentifiers
 
+@MainActor
 class AppDelegate: NSObject, NSApplicationDelegate {
     var mainWindowController: MainWindowController?
+    private let welcomeDefaults: UserDefaults
+    private var welcomeWalkthroughWindow: NSWindow?
+
+    init(welcomeDefaults: UserDefaults = .standard) {
+        self.welcomeDefaults = welcomeDefaults
+        super.init()
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Without a proper .app bundle (e.g. swift run), macOS treats the
@@ -40,14 +49,26 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         setupMenuBar()
 
-        mainWindowController = MainWindowController()
-        mainWindowController?.showWindow(nil)
-        mainWindowController?.window?.makeKeyAndOrderFront(nil)
+        if let restoredController = NSDocumentController.shared.documents
+            .compactMap({ $0.windowControllers.first as? MainWindowController })
+            .last {
+            mainWindowController = restoredController
+            restoredController.window?.makeKeyAndOrderFront(nil)
+        } else {
+            showUntitledDocument()
+        }
         NSApp.activate(ignoringOtherApps: true)
+        DispatchQueue.main.async { [weak self] in
+            self?.presentWelcomeWalkthroughIfNeeded()
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true
+    }
+
+    func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool {
+        false
     }
 
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool {
@@ -56,7 +77,71 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func application(_ application: NSApplication, open urls: [URL]) {
         guard let url = urls.first else { return }
-        mainWindowController?.handleImportedFile(url)
+        if url.pathExtension.lowercased() == "rdt" {
+            do {
+                try openDocument(at: url)
+            } catch {
+                mainWindowController?.showError(error.localizedDescription)
+            }
+            return
+        }
+
+        let controller: MainWindowController
+        if let mainWindowController,
+           mainWindowController.project.appState == .empty {
+            controller = mainWindowController
+        } else {
+            controller = showUntitledDocument()
+        }
+        controller.handleImportedFile(url)
+    }
+
+    @objc func openProject(_ sender: Any?) {
+        let panel = NSOpenPanel()
+        if let projectType = UTType(filenameExtension: "rdt") {
+            panel.allowedContentTypes = [projectType]
+        }
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.message = "Open a Redact project"
+
+        panel.begin { [weak self] response in
+            guard response == .OK, let url = panel.url, let self else { return }
+            do {
+                try openDocument(at: url)
+            } catch {
+                mainWindowController?.showError(error.localizedDescription)
+            }
+        }
+    }
+
+    @discardableResult
+    private func showUntitledDocument() -> MainWindowController {
+        let document = RedactDocument()
+        return show(document)
+    }
+
+    func openDocument(at url: URL) throws {
+        if let document = mainWindowController?.document as? RedactDocument,
+           document.project.appState == .empty,
+           !document.isDocumentEdited {
+            document.close()
+        }
+
+        let document = RedactDocument()
+        try document.load(from: url)
+        _ = show(document)
+    }
+
+    @discardableResult
+    private func show(_ document: RedactDocument) -> MainWindowController {
+        NSDocumentController.shared.addDocument(document)
+        document.makeWindowControllers()
+        document.showWindows()
+        let controller = document.windowControllers.first as! MainWindowController
+        mainWindowController = controller
+        controller.window?.makeKeyAndOrderFront(nil)
+        return controller
     }
 
     // MARK: - Menu Bar
@@ -68,7 +153,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let appMenuItem = NSMenuItem()
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "About Redact", action: #selector(showAboutWindow), keyEquivalent: "")
-        appMenu.addItem(withTitle: "Preferences…", action: #selector(showPreferences), keyEquivalent: ",")
+        appMenu.addItem(withTitle: "Settings…", action: #selector(showPreferences), keyEquivalent: ",")
         appMenu.addItem(NSMenuItem.separator())
         appMenu.addItem(withTitle: "Hide Redact", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
         let hideOthersItem = NSMenuItem(title: "Hide Others", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h")
@@ -83,15 +168,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // File menu
         let fileMenuItem = NSMenuItem()
         let fileMenu = NSMenu(title: "File")
-        fileMenu.addItem(withTitle: "Import Media…", action: #selector(MainWindowController.importMedia(_:)), keyEquivalent: "o")
+        fileMenu.addItem(withTitle: "Open Project…", action: #selector(openProject(_:)), keyEquivalent: "o")
+        let importItem = NSMenuItem(title: "Import Media…", action: #selector(MainWindowController.importMedia(_:)), keyEquivalent: "o")
+        importItem.keyEquivalentModifierMask = [.command, .shift]
+        fileMenu.addItem(importItem)
         let closeProjectItem = NSMenuItem(title: "Close Project", action: #selector(MainWindowController.closeProject(_:)), keyEquivalent: "w")
         closeProjectItem.keyEquivalentModifierMask = [.command, .shift]
         fileMenu.addItem(closeProjectItem)
         fileMenu.addItem(NSMenuItem.separator())
         let saveItem = NSMenuItem(title: "Save Project", action: #selector(MainWindowController.saveProject(_:)), keyEquivalent: "s")
         fileMenu.addItem(saveItem)
+        let saveAsItem = NSMenuItem(title: "Save Project As…", action: #selector(MainWindowController.saveProjectAs(_:)), keyEquivalent: "S")
+        fileMenu.addItem(saveAsItem)
+        fileMenu.addItem(withTitle: "Relink Media…", action: #selector(MainWindowController.relinkMedia(_:)), keyEquivalent: "")
         fileMenu.addItem(NSMenuItem.separator())
-        fileMenu.addItem(withTitle: "Export Video…", action: #selector(MainWindowController.exportVideo(_:)), keyEquivalent: "e")
+        let exportMediaItem = NSMenuItem(
+            title: "Export Media…",
+            action: #selector(MainWindowController.exportMedia(_:)),
+            keyEquivalent: "e"
+        )
+        exportMediaItem.keyEquivalentModifierMask = [.command, .option]
+        fileMenu.addItem(exportMediaItem)
         let exportSRTItem = NSMenuItem(title: "Export SRT…", action: #selector(MainWindowController.exportSRT(_:)), keyEquivalent: "e")
         exportSRTItem.keyEquivalentModifierMask = [.command, .shift]
         fileMenu.addItem(exportSRTItem)
@@ -108,12 +205,60 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         redoItem.keyEquivalentModifierMask = [.command, .shift]
         editMenu.addItem(redoItem)
         editMenu.addItem(NSMenuItem.separator())
+        editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        let findItem = NSMenuItem(
+            title: "Find…",
+            action: #selector(NSResponder.performTextFinderAction(_:)),
+            keyEquivalent: "f"
+        )
+        findItem.tag = NSTextFinder.Action.showFindInterface.rawValue
+        editMenu.addItem(findItem)
+        editMenu.addItem(NSMenuItem.separator())
+        editMenu.addItem(
+            withTitle: "Clean Up Transcript…",
+            action: #selector(MainWindowController.cleanUpTranscript(_:)),
+            keyEquivalent: ""
+        )
+        editMenu.addItem(
+            withTitle: "Edit with Agent…",
+            action: #selector(MainWindowController.editWithAgent(_:)),
+            keyEquivalent: ""
+        )
+        editMenu.addItem(NSMenuItem.separator())
+        editMenu.addItem(
+            withTitle: "Correct Selected Word…",
+            action: #selector(MainWindowController.correctSelectedWord(_:)),
+            keyEquivalent: ""
+        )
+        editMenu.addItem(
+            withTitle: "Restore Selected Words",
+            action: #selector(MainWindowController.restoreSelectedWords(_:)),
+            keyEquivalent: ""
+        )
         let deleteItem = NSMenuItem(title: "Delete Selected", action: #selector(MainWindowController.deleteSelected(_:)), keyEquivalent: "\u{08}")
         deleteItem.keyEquivalentModifierMask = []
         editMenu.addItem(deleteItem)
         editMenu.addItem(withTitle: "Select All", action: #selector(MainWindowController.selectAllWords(_:)), keyEquivalent: "a")
         editMenuItem.submenu = editMenu
         mainMenu.addItem(editMenuItem)
+
+        // View menu
+        let viewMenuItem = NSMenuItem()
+        let viewMenu = NSMenu(title: "View")
+        let previewItem = NSMenuItem(
+            title: "Hide Preview",
+            action: #selector(MainWindowController.togglePreview(_:)),
+            keyEquivalent: "p"
+        )
+        previewItem.keyEquivalentModifierMask = [.command, .option]
+        viewMenu.addItem(previewItem)
+        viewMenu.addItem(
+            withTitle: "Enter Full Screen Preview",
+            action: #selector(MainWindowController.togglePreviewFullScreen(_:)),
+            keyEquivalent: ""
+        )
+        viewMenuItem.submenu = viewMenu
+        mainMenu.addItem(viewMenuItem)
 
         // Playback menu
         let playbackMenuItem = NSMenuItem()
@@ -128,6 +273,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let skipForwardItem = NSMenuItem(title: "Skip Forward 5s", action: #selector(MainWindowController.skipForward(_:)), keyEquivalent: String(Character(UnicodeScalar(NSRightArrowFunctionKey)!)))
         skipForwardItem.keyEquivalentModifierMask = []
         playbackMenu.addItem(skipForwardItem)
+        playbackMenu.addItem(NSMenuItem.separator())
+        playbackMenu.addItem(
+            withTitle: "Previous Edit",
+            action: #selector(MainWindowController.previousEdit(_:)),
+            keyEquivalent: ""
+        )
+        playbackMenu.addItem(
+            withTitle: "Next Edit",
+            action: #selector(MainWindowController.nextEdit(_:)),
+            keyEquivalent: ""
+        )
         playbackMenuItem.submenu = playbackMenu
         mainMenu.addItem(playbackMenuItem)
 
@@ -141,13 +297,86 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Help menu
         let helpMenuItem = NSMenuItem()
-        let helpMenu = NSMenu(title: "Help")
+        let helpMenu = makeHelpMenu()
         helpMenuItem.submenu = helpMenu
         mainMenu.addItem(helpMenuItem)
 
         NSApp.mainMenu = mainMenu
         NSApp.windowsMenu = windowMenu
         NSApp.helpMenu = helpMenu
+    }
+
+    func makeHelpMenu() -> NSMenu {
+        let helpMenu = NSMenu(title: "Help")
+        let welcomeItem = NSMenuItem(
+            title: "Welcome to Redact",
+            action: #selector(showWelcomeWalkthrough(_:)),
+            keyEquivalent: ""
+        )
+        welcomeItem.target = self
+        helpMenu.addItem(welcomeItem)
+        return helpMenu
+    }
+
+    @objc func showWelcomeWalkthrough(_ sender: Any?) {
+        presentWelcomeWalkthrough()
+    }
+
+    private func presentWelcomeWalkthroughIfNeeded() {
+        guard WelcomeWalkthroughStore.shouldPresent(using: welcomeDefaults) else { return }
+        presentWelcomeWalkthrough()
+    }
+
+    private func presentWelcomeWalkthrough() {
+        guard let parentWindow = mainWindowController?.window else { return }
+        if let welcomeWalkthroughWindow {
+            welcomeWalkthroughWindow.makeKeyAndOrderFront(nil)
+            return
+        }
+        guard parentWindow.attachedSheet == nil else {
+            NSSound.beep()
+            return
+        }
+
+        let frame = NSRect(x: 0, y: 0, width: 560, height: 520)
+        let walkthroughView = WelcomeWalkthroughView(
+            frame: frame,
+            applicationIcon: NSApp.applicationIconImage,
+            doNotShowAgain: !WelcomeWalkthroughStore.shouldPresent(using: welcomeDefaults)
+        )
+        let sheetWindow = NSWindow(
+            contentRect: frame,
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        sheetWindow.title = "Welcome to Redact"
+        sheetWindow.titleVisibility = .hidden
+        sheetWindow.isReleasedWhenClosed = false
+        sheetWindow.backgroundColor = Theme.surface1
+        sheetWindow.contentView = walkthroughView
+        welcomeWalkthroughWindow = sheetWindow
+
+        let dismiss: () -> Void = {
+            [weak self, weak parentWindow, weak sheetWindow, weak walkthroughView] in
+            guard let self, let walkthroughView else { return }
+            WelcomeWalkthroughStore.setDoNotShowAgain(
+                walkthroughView.doNotShowAgain,
+                using: self.welcomeDefaults
+            )
+            if let parentWindow, let sheetWindow {
+                parentWindow.endSheet(sheetWindow)
+            }
+        }
+        walkthroughView.onFinish = dismiss
+        walkthroughView.onSkip = dismiss
+
+        parentWindow.beginSheet(sheetWindow) { [weak self] _ in
+            self?.welcomeWalkthroughWindow = nil
+        }
+        DispatchQueue.main.async {
+            _ = walkthroughView.focusInitialControl(in: sheetWindow)
+        }
     }
 
     // MARK: - About Window

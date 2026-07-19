@@ -1,14 +1,7 @@
 import Foundation
 
-/// Utility for finding external tool paths and managing temp directories.
+/// Utility for finding external tool paths.
 enum PathUtilities {
-    /// Temp directory for intermediate files (audio extraction, etc.)
-    static var tempDir: String {
-        let path = "/tmp/redact"
-        try? FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
-        return path
-    }
-
     /// Find FFmpeg binary. Checks Homebrew paths first, then falls back to `which`.
     static func findFFmpeg() -> String? {
         let candidates = [
@@ -40,11 +33,6 @@ enum PathUtilities {
         }
 
         return findInPath("ffprobe")
-    }
-
-    /// Clean up temp directory.
-    static func cleanTempDir() {
-        try? FileManager.default.removeItem(atPath: tempDir)
     }
 
     /// Use `which` to find a binary in PATH.

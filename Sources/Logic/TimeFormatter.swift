@@ -23,9 +23,10 @@ func formatTimeFull(_ seconds: Double) -> String {
 
 /// Format seconds as SRT timestamp "HH:MM:SS,mmm".
 func formatSrtTime(_ seconds: Double) -> String {
-    let hrs = Int(seconds) / 3600
-    let mins = (Int(seconds) % 3600) / 60
-    let secs = Int(seconds) % 60
-    let ms = Int((seconds.truncatingRemainder(dividingBy: 1)) * 1000)
+    let totalMilliseconds = Int((max(0, seconds) * 1000).rounded())
+    let hrs = totalMilliseconds / 3_600_000
+    let mins = (totalMilliseconds % 3_600_000) / 60_000
+    let secs = (totalMilliseconds % 60_000) / 1000
+    let ms = totalMilliseconds % 1000
     return String(format: "%02d:%02d:%02d,%03d", hrs, mins, secs, ms)
 }

@@ -27,7 +27,9 @@ let package = Package(
         .testTarget(
             name: "RedactTests",
             dependencies: ["Redact"],
-            path: "Tests"
+            path: "Tests",
+            exclude: ["Acceptance/README.md", "Performance/README.md", "UI"],
+            resources: [.copy("Fixtures")]
         ),
     ]
 )

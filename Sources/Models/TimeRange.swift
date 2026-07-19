@@ -1,7 +1,7 @@
 import Foundation
 
 /// A time range with start and end in seconds.
-struct TimeRange: Codable, Equatable {
+struct TimeRange: Codable, Equatable, Sendable {
     var start: Double
     var end: Double
 

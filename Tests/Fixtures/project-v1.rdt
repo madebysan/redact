@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "videoFile": "sample.mov",
+  "videoPath": "/Users/example/Videos/sample.mov",
+  "language": "en",
+  "duration": 2,
+  "segments": [
+    {
+      "id": 0,
+      "words": [
+        {
+          "id": "w_0",
+          "word": "Hello",
+          "start": 0,
+          "end": 0.5,
+          "confidence": 0.9,
+          "deleted": false
+        },
+        {
+          "id": "w_1",
+          "word": "world.",
+          "start": 0.6,
+          "end": 1,
+          "confidence": 0.8,
+          "deleted": true
+        }
+      ]
+    }
+  ]
+}

@@ -6,14 +6,15 @@ enum AppState: String, Codable {
     case importing
     case transcribing
     case editing
+    case missingMedia
     case exporting
 }
 
 /// Progress information during transcription.
 /// Indeterminate by design — Whisper's window count isn't monotonic,
 /// so a numeric percent lies more than it informs.
-struct TranscribeProgress {
-    enum Status {
+struct TranscribeProgress: Equatable, Sendable {
+    enum Status: Equatable, Sendable {
         case loadingModel
         case transcribing
         case complete
@@ -22,4 +23,6 @@ struct TranscribeProgress {
 
     var status: Status
     var message: String?
+    var completedTextPreview: String? = nil
+    var completedWordCount: Int? = nil
 }

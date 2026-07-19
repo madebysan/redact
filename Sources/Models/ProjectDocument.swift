@@ -3,22 +3,36 @@ import Foundation
 /// Undo entry recording word state changes for delta-based undo/redo.
 struct UndoEntry {
     let wordChanges: [(wordId: String, deleted: Bool)]
+    let textChanges: [(wordId: String, text: String)]
+
+    init(
+        wordChanges: [(wordId: String, deleted: Bool)] = [],
+        textChanges: [(wordId: String, text: String)] = []
+    ) {
+        self.wordChanges = wordChanges
+        self.textChanges = textChanges
+    }
+}
+
+private struct WordLocation {
+    let segmentIndex: Int
+    let wordIndex: Int
 }
 
 /// Raw transcript as received from Whisper (before silence injection).
-struct RawWord: Codable {
+struct RawWord: Codable, Equatable, Sendable {
     let word: String
     let start: Double
     let end: Double
     let confidence: Double
 }
 
-struct RawSegment: Codable {
+struct RawSegment: Codable, Equatable, Sendable {
     let id: Int
     let words: [RawWord]
 }
 
-struct RawTranscript: Codable {
+struct RawTranscript: Codable, Equatable, Sendable {
     let segments: [RawSegment]
     let language: String
     let duration: Double
@@ -32,11 +46,23 @@ class ProjectDocument {
     var filePath: String?
     var audioPath: String?
     var duration: Double = 0
+    var mediaInfo: MediaInfo?
 
     // Transcript
     var segments: [Segment] = []
     var allWords: [Word] = []
     var language: String = ""
+    private(set) var revision: ProjectRevision?
+    private var transcriptIndex: TranscriptIndex?
+    private var wordLocations: [String: WordLocation] = [:]
+
+    var sourceTranscript: SourceTranscript? {
+        revision?.transcript
+    }
+
+    var editDecisionList: EditDecisionList {
+        revision?.edits ?? EditDecisionList()
+    }
 
     // Playback
     var currentTime: Double = 0
@@ -62,12 +88,16 @@ class ProjectDocument {
 
     var canUndo: Bool { !undoStack.isEmpty }
     var canRedo: Bool { !redoStack.isEmpty }
+    var hasEditableTranscript: Bool {
+        appState == .editing || appState == .missingMedia
+    }
 
     // MARK: - Constants
 
     private static let silenceThreshold: Double = 0.8
     private static let silenceChunk: Double = 0.5
     private static let maxUndoLevels = 100
+    private static let maxCorrectedWordLength = 200
 
     // MARK: - Set Transcript (with silence injection)
 
@@ -154,8 +184,11 @@ class ProjectDocument {
             return Segment(id: seg.id, words: wordsWithSilence)
         }
 
-        segments = finalSegments
-        allWords = finalSegments.flatMap(\.words)
+        installTranscriptProjection(
+            segments: finalSegments,
+            language: transcript.language,
+            duration: transcript.duration
+        )
         language = transcript.language
         duration = transcript.duration
         appState = .editing
@@ -165,141 +198,175 @@ class ProjectDocument {
 
     // MARK: - Selection
 
-    func selectWords(_ ids: [String]) {
-        selectedWordIds = Set(ids)
+    @discardableResult
+    func selectWords(_ ids: [String]) -> Set<String> {
+        let nextSelection = Set(ids)
+        let changedWordIDs = selectedWordIds.symmetricDifference(nextSelection)
+        selectedWordIds = nextSelection
+        return changedWordIDs
     }
 
-    func addToSelection(_ ids: [String]) {
-        for id in ids {
-            selectedWordIds.insert(id)
-        }
+    @discardableResult
+    func addToSelection(_ ids: [String]) -> Set<String> {
+        let previousSelection = selectedWordIds
+        selectedWordIds.formUnion(ids)
+        return previousSelection.symmetricDifference(selectedWordIds)
     }
 
-    func clearSelection() {
+    @discardableResult
+    func clearSelection() -> Set<String> {
+        let changedWordIDs = selectedWordIds
         selectedWordIds = []
+        return changedWordIDs
     }
 
-    func selectAll() {
+    @discardableResult
+    func selectAll() -> Set<String> {
+        let previousSelection = selectedWordIds
         let allIds = allWords.filter { !$0.deleted }.map(\.id)
         selectedWordIds = Set(allIds)
+        return previousSelection.symmetricDifference(selectedWordIds)
     }
 
     // MARK: - Delete / Restore
 
-    func deleteSelected() {
-        guard !selectedWordIds.isEmpty else { return }
+    @discardableResult
+    func deleteSelected() -> Set<String> {
+        guard !selectedWordIds.isEmpty else { return [] }
 
-        var changes: [(wordId: String, deleted: Bool)] = []
-        let newSegments = segments.map { seg in
-            Segment(id: seg.id, words: seg.words.map { w in
-                if selectedWordIds.contains(w.id) && !w.deleted {
-                    changes.append((wordId: w.id, deleted: false))
-                    return Word(id: w.id, word: w.word, start: w.start, end: w.end,
-                                confidence: w.confidence, deleted: true, isSilence: w.isSilence)
-                }
-                return w
-            })
+        let changes = selectedWordIds.compactMap { id -> (wordId: String, deleted: Bool)? in
+            guard let word = word(withID: id), !word.deleted else { return nil }
+            return (wordId: id, deleted: false)
         }
+        guard !changes.isEmpty else { return [] }
 
-        guard !changes.isEmpty else { return }
-
-        undoStack.append(UndoEntry(wordChanges: changes))
-        if undoStack.count > Self.maxUndoLevels {
-            undoStack.removeFirst(undoStack.count - Self.maxUndoLevels)
-        }
-        redoStack = []
-
-        segments = newSegments
-        allWords = newSegments.flatMap(\.words)
+        recordUndo(UndoEntry(wordChanges: changes))
+        let selectedWordIDs = selectedWordIds
+        let changedWordIDs = applyDeletionStates(
+            Dictionary(uniqueKeysWithValues: changes.map { ($0.wordId, true) })
+        )
         selectedWordIds = []
+        return selectedWordIDs.union(changedWordIDs)
     }
 
-    func restoreWord(_ id: String) {
-        var changes: [(wordId: String, deleted: Bool)] = []
-        let newSegments = segments.map { seg in
-            Segment(id: seg.id, words: seg.words.map { w in
-                if w.id == id && w.deleted {
-                    changes.append((wordId: w.id, deleted: true))
-                    return Word(id: w.id, word: w.word, start: w.start, end: w.end,
-                                confidence: w.confidence, deleted: false, isSilence: w.isSilence)
-                }
-                return w
-            })
+    /// Delete a reviewed set of transcript words as one undoable edit.
+    @discardableResult
+    func deleteWords(_ ids: Set<String>) -> Set<String> {
+        let changes = ids.compactMap { id -> (wordId: String, deleted: Bool)? in
+            guard let word = word(withID: id), !word.deleted else { return nil }
+            return (wordId: id, deleted: false)
+        }
+        guard !changes.isEmpty else { return [] }
+
+        recordUndo(UndoEntry(wordChanges: changes))
+        let changedWordIDs = applyDeletionStates(
+            Dictionary(uniqueKeysWithValues: changes.map { ($0.wordId, true) })
+        )
+        selectedWordIds.subtract(changedWordIDs)
+        return changedWordIDs
+    }
+
+    @discardableResult
+    func restoreWord(_ id: String) -> Set<String> {
+        guard let word = word(withID: id), word.deleted else { return [] }
+
+        recordUndo(UndoEntry(wordChanges: [(wordId: id, deleted: true)]))
+        return applyDeletionStates([id: false])
+    }
+
+    @discardableResult
+    func restoreSelected() -> Set<String> {
+        let changes = selectedWordIds.compactMap { id -> (wordId: String, deleted: Bool)? in
+            guard let word = word(withID: id), word.deleted else { return nil }
+            return (wordId: id, deleted: true)
+        }
+        guard !changes.isEmpty else { return [] }
+
+        recordUndo(UndoEntry(wordChanges: changes))
+        let selectedWordIDs = selectedWordIds
+        let changedWordIDs = applyDeletionStates(
+            Dictionary(uniqueKeysWithValues: changes.map { ($0.wordId, false) })
+        )
+        selectedWordIds = []
+        return selectedWordIDs.union(changedWordIDs)
+    }
+
+    /// Correct visible transcript text while preserving the word's identity,
+    /// timing, and deletion decision.
+    @discardableResult
+    func correctWordText(id: String, text: String) -> Set<String> {
+        let normalizedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedText.isEmpty,
+              normalizedText.count <= Self.maxCorrectedWordLength,
+              let word = word(withID: id),
+              !word.isActualSilence,
+              word.word != normalizedText else {
+            return []
         }
 
-        guard !changes.isEmpty else { return }
-
-        undoStack.append(UndoEntry(wordChanges: changes))
-        if undoStack.count > Self.maxUndoLevels {
-            undoStack.removeFirst(undoStack.count - Self.maxUndoLevels)
-        }
-        redoStack = []
-
-        segments = newSegments
-        allWords = newSegments.flatMap(\.words)
+        recordUndo(UndoEntry(textChanges: [(wordId: id, text: word.word)]))
+        return applyTextChanges([id: normalizedText])
     }
 
     // MARK: - Undo / Redo
 
-    func undo() {
-        guard let entry = undoStack.last else { return }
-
-        let wordMap = Dictionary(uniqueKeysWithValues: entry.wordChanges.map { ($0.wordId, $0.deleted) })
-
-        let newSegments = segments.map { seg in
-            Segment(id: seg.id, words: seg.words.map { w in
-                if let previousDeleted = wordMap[w.id] {
-                    return Word(id: w.id, word: w.word, start: w.start, end: w.end,
-                                confidence: w.confidence, deleted: previousDeleted, isSilence: w.isSilence)
-                }
-                return w
-            })
-        }
-
-        // Build redo entry (inverse)
-        let redoChanges = entry.wordChanges.map { (wordId: $0.wordId, deleted: !$0.deleted) }
-
-        undoStack.removeLast()
-        redoStack.append(UndoEntry(wordChanges: redoChanges))
-
-        segments = newSegments
-        allWords = newSegments.flatMap(\.words)
+    @discardableResult
+    func undo() -> Set<String> {
+        guard let entry = undoStack.popLast() else { return [] }
+        redoStack.append(inverseEntry(for: entry))
+        return applyUndoEntry(entry)
     }
 
-    func redo() {
-        guard let entry = redoStack.last else { return }
+    @discardableResult
+    func redo() -> Set<String> {
+        guard let entry = redoStack.popLast() else { return [] }
+        undoStack.append(inverseEntry(for: entry))
+        return applyUndoEntry(entry)
+    }
 
-        let wordMap = Dictionary(uniqueKeysWithValues: entry.wordChanges.map { ($0.wordId, $0.deleted) })
+    // MARK: - Indexed transcript access
 
-        let newSegments = segments.map { seg in
-            Segment(id: seg.id, words: seg.words.map { w in
-                if let targetDeleted = wordMap[w.id] {
-                    return Word(id: w.id, word: w.word, start: w.start, end: w.end,
-                                confidence: w.confidence, deleted: !targetDeleted, isSilence: w.isSilence)
-                }
-                return w
-            })
+    func word(withID id: String) -> Word? {
+        guard let position = transcriptIndex?.position(forWordID: id),
+              allWords.indices.contains(position) else {
+            return nil
         }
+        return allWords[position]
+    }
 
-        // Build undo entry (inverse of redo)
-        let undoChanges = entry.wordChanges.map { (wordId: $0.wordId, deleted: $0.deleted) }
+    func wordIDs(from fromID: String, to toID: String) -> [String] {
+        guard let transcript = sourceTranscript,
+              let range = transcriptIndex?.closedRange(fromWordID: fromID, toWordID: toID) else {
+            return []
+        }
+        return transcript.words[range].map(\.id)
+    }
 
-        redoStack.removeLast()
-        undoStack.append(UndoEntry(wordChanges: undoChanges))
+    func renderPlan(policy: EditTimingPolicy) -> RenderPlan? {
+        revision?.renderPlan(policy: policy)
+    }
 
-        segments = newSegments
-        allWords = newSegments.flatMap(\.words)
+    func renderPlan(
+        deletingAdditionalWordIDs wordIDs: Set<String>,
+        policy: EditTimingPolicy
+    ) -> RenderPlan? {
+        guard let transcript = sourceTranscript else { return nil }
+        let edits = editDecisionList.applying(.delete(wordIDs: wordIDs))
+        return RenderPlan(transcript: transcript, edits: edits, policy: policy)
     }
 
     // MARK: - Load Project
 
     func loadProject(segments: [Segment], language: String, duration: Double, filePath: String) {
-        self.segments = segments
-        self.allWords = segments.flatMap(\.words)
+        installTranscriptProjection(
+            segments: segments,
+            language: language,
+            duration: duration
+        )
         self.language = language
         self.duration = duration
         self.filePath = filePath
-        self.appState = .editing
+        self.appState = filePath.isEmpty ? .missingMedia : .editing
         self.undoStack = []
         self.redoStack = []
         self.selectedWordIds = []
@@ -310,6 +377,50 @@ class ProjectDocument {
         self.exportProgress = nil
     }
 
+    func loadProject(
+        transcript: SourceTranscript,
+        edits: EditDecisionList,
+        segmentStartWordIDs: [String],
+        filePath: String
+    ) {
+        let segmentStarts = Set(segmentStartWordIDs)
+        var projectedSegments: [Segment] = []
+        var projectedWords: [Word] = []
+
+        func appendSegment() {
+            guard !projectedWords.isEmpty else { return }
+            projectedSegments.append(
+                Segment(id: projectedSegments.count, words: projectedWords)
+            )
+            projectedWords = []
+        }
+
+        for word in transcript.words {
+            if segmentStarts.contains(word.id), !projectedWords.isEmpty {
+                appendSegment()
+            }
+            projectedWords.append(
+                Word(
+                    id: word.id,
+                    word: word.text,
+                    start: word.start,
+                    end: word.end,
+                    confidence: word.confidence,
+                    deleted: edits.contains(wordID: word.id),
+                    isSilence: word.isSilence
+                )
+            )
+        }
+        appendSegment()
+
+        loadProject(
+            segments: projectedSegments,
+            language: transcript.language,
+            duration: transcript.duration,
+            filePath: filePath
+        )
+    }
+
     // MARK: - Reset
 
     func reset() {
@@ -317,9 +428,13 @@ class ProjectDocument {
         filePath = nil
         audioPath = nil
         duration = 0
+        mediaInfo = nil
         segments = []
         allWords = []
         language = ""
+        revision = nil
+        transcriptIndex = nil
+        wordLocations = [:]
         currentTime = 0
         isPlaying = false
         playbackRate = 1
@@ -330,5 +445,142 @@ class ProjectDocument {
         errorMessage = nil
         undoStack = []
         redoStack = []
+    }
+
+    // MARK: - Canonical edit projection
+
+    private func installTranscriptProjection(
+        segments: [Segment],
+        language: String,
+        duration: Double
+    ) {
+        let words = segments.flatMap(\.words)
+        let transcript = SourceTranscript(
+            v1Words: words,
+            language: language,
+            duration: duration
+        )
+        let edits = EditDecisionList(v1Words: words)
+
+        self.segments = segments
+        allWords = words
+        revision = ProjectRevision(transcript: transcript, edits: edits)
+        transcriptIndex = TranscriptIndex(transcript: transcript)
+        wordLocations = Dictionary(
+            uniqueKeysWithValues: segments.enumerated().flatMap { segmentIndex, segment in
+                segment.words.enumerated().map { wordIndex, word in
+                    (
+                        word.id,
+                        WordLocation(segmentIndex: segmentIndex, wordIndex: wordIndex)
+                    )
+                }
+            }
+        )
+    }
+
+    private func recordUndo(_ entry: UndoEntry) {
+        undoStack.append(entry)
+        if undoStack.count > Self.maxUndoLevels {
+            undoStack.removeFirst(undoStack.count - Self.maxUndoLevels)
+        }
+        redoStack = []
+    }
+
+    private func applyDeletionStates(_ states: [String: Bool]) -> Set<String> {
+        guard var nextRevision = revision else { return [] }
+
+        let changedStates = states.filter { id, deleted in
+            guard let word = word(withID: id) else { return false }
+            return word.deleted != deleted
+        }
+        guard !changedStates.isEmpty else { return [] }
+
+        let deletedWordIDs = Set(changedStates.compactMap { id, deleted in
+            deleted ? id : nil
+        })
+        let restoredWordIDs = Set(changedStates.compactMap { id, deleted in
+            deleted ? nil : id
+        })
+
+        if !deletedWordIDs.isEmpty {
+            nextRevision = nextRevision.applying(.delete(wordIDs: deletedWordIDs))
+        }
+        if !restoredWordIDs.isEmpty {
+            nextRevision = nextRevision.applying(.restore(wordIDs: restoredWordIDs))
+        }
+        revision = nextRevision
+
+        for (id, deleted) in changedStates {
+            guard let position = transcriptIndex?.position(forWordID: id),
+                  allWords.indices.contains(position),
+                  let location = wordLocations[id],
+                  segments.indices.contains(location.segmentIndex),
+                  segments[location.segmentIndex].words.indices.contains(location.wordIndex) else {
+                continue
+            }
+            allWords[position].deleted = deleted
+            segments[location.segmentIndex].words[location.wordIndex].deleted = deleted
+        }
+
+        return Set(changedStates.keys)
+    }
+
+    private func applyTextChanges(_ changes: [String: String]) -> Set<String> {
+        guard var nextRevision = revision else { return [] }
+        let changedText = changes.filter { id, text in
+            guard let word = word(withID: id), !word.isActualSilence else { return false }
+            return word.word != text
+        }
+        guard !changedText.isEmpty else { return [] }
+
+        var appliedText: [String: String] = [:]
+        for (id, text) in changedText {
+            guard let correctedRevision = nextRevision.correctingWordText(
+                wordID: id,
+                text: text
+            ) else {
+                continue
+            }
+            nextRevision = correctedRevision
+            appliedText[id] = text
+        }
+        guard !appliedText.isEmpty else { return [] }
+        revision = nextRevision
+
+        for (id, text) in appliedText {
+            guard let position = transcriptIndex?.position(forWordID: id),
+                  allWords.indices.contains(position),
+                  let location = wordLocations[id],
+                  segments.indices.contains(location.segmentIndex),
+                  segments[location.segmentIndex].words.indices.contains(location.wordIndex) else {
+                continue
+            }
+            allWords[position].word = text
+            segments[location.segmentIndex].words[location.wordIndex].word = text
+        }
+        return Set(appliedText.keys)
+    }
+
+    private func inverseEntry(for entry: UndoEntry) -> UndoEntry {
+        UndoEntry(
+            wordChanges: entry.wordChanges.compactMap { change in
+                guard let word = word(withID: change.wordId) else { return nil }
+                return (wordId: change.wordId, deleted: word.deleted)
+            },
+            textChanges: entry.textChanges.compactMap { change in
+                guard let word = word(withID: change.wordId) else { return nil }
+                return (wordId: change.wordId, text: word.word)
+            }
+        )
+    }
+
+    private func applyUndoEntry(_ entry: UndoEntry) -> Set<String> {
+        let deletionChanges = applyDeletionStates(
+            Dictionary(uniqueKeysWithValues: entry.wordChanges.map { ($0.wordId, $0.deleted) })
+        )
+        let textChanges = applyTextChanges(
+            Dictionary(uniqueKeysWithValues: entry.textChanges.map { ($0.wordId, $0.text) })
+        )
+        return deletionChanges.union(textChanges)
     }
 }
