@@ -1,4 +1,5 @@
 import AppKit
+import Sparkle
 import UniformTypeIdentifiers
 
 @MainActor
@@ -6,6 +7,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var mainWindowController: MainWindowController?
     private let welcomeDefaults: UserDefaults
     private var welcomeWalkthroughWindow: NSWindow?
+    // Checks the appcast named by SUFeedURL in Info.plist and offers signed updates.
+    // Started in applicationDidFinishLaunching so tests and `swift run` never start it.
+    private lazy var updaterController = SPUStandardUpdaterController(
+        startingUpdater: false,
+        updaterDelegate: self,
+        userDriverDelegate: nil
+    )
 
     init(welcomeDefaults: UserDefaults = .standard) {
         self.welcomeDefaults = welcomeDefaults
@@ -17,6 +25,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // process as a background tool — no dock icon, no key event focus.
         // This tells macOS to treat it as a regular app.
         NSApp.setActivationPolicy(.regular)
+
+        // Only release bundles carry the feed URL and public key; without them
+        // Sparkle would show a "failed to start" alert.
+        if Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") != nil {
+            updaterController.startUpdater()
+        }
 
         // Set dock icon from .icns (with 5% padding to reduce visual size)
         var rawIcon: NSImage?
@@ -65,6 +79,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true
+    }
+
+    /// Closes the welcome walkthrough sheet if it is showing. RedactApplication
+    /// calls this before quitting, because an attached sheet makes AppKit cancel
+    /// termination before applicationShouldTerminate is ever asked.
+    func closeWelcomeWalkthrough() {
+        if let welcomeWalkthroughWindow, let parentWindow = welcomeWalkthroughWindow.sheetParent {
+            parentWindow.endSheet(welcomeWalkthroughWindow)
+        }
     }
 
     func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool {
@@ -153,6 +176,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let appMenuItem = NSMenuItem()
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "About Redact", action: #selector(showAboutWindow), keyEquivalent: "")
+        let checkForUpdatesItem = NSMenuItem(
+            title: "Check for Updates…",
+            action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)),
+            keyEquivalent: ""
+        )
+        checkForUpdatesItem.target = updaterController
+        appMenu.addItem(checkForUpdatesItem)
         appMenu.addItem(withTitle: "Settings…", action: #selector(showPreferences), keyEquivalent: ",")
         appMenu.addItem(NSMenuItem.separator())
         appMenu.addItem(withTitle: "Hide Redact", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
@@ -426,5 +456,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if let url = URL(string: "https://santiagoalonso.com") {
             NSWorkspace.shared.open(url)
         }
+    }
+}
+
+extension AppDelegate: SPUUpdaterDelegate {
+    func updaterWillRelaunchApplication(_ updater: SPUUpdater) {
+        // Sparkle's installer asks the app to quit without going through
+        // RedactApplication.terminate(_:), so close the walkthrough here too.
+        closeWelcomeWalkthrough()
     }
 }

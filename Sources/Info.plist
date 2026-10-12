@@ -9,9 +9,9 @@
 	<key>CFBundleIdentifier</key>
 	<string>com.santiagoalonso.redact</string>
 	<key>CFBundleVersion</key>
-	<string>4</string>
+	<string>5</string>
 	<key>CFBundleShortVersionString</key>
-	<string>2.0.0</string>
+	<string>2.0.1</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleExecutable</key>
@@ -26,6 +26,12 @@
 	<true/>
 	<key>NSSupportsAutomaticTermination</key>
 	<false/>
+	<key>SUFeedURL</key>
+	<string>https://github.com/madebysan/redact/releases/latest/download/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>UAKRJmeYrucyUDj6yLMjYEKfKXE+M4iLxw7qKBrV8yU=</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
 	<key>CFBundleDocumentTypes</key>
 	<array>
 		<dict>

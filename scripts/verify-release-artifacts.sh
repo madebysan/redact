@@ -40,7 +40,17 @@ if grep -q 'com.apple.security.app-sandbox' <<< "$SIGNATURE_DETAILS"; then
     fail "Direct-distribution build must omit the App Sandbox entitlement until the sandbox migration is complete"
 fi
 
-echo "PASS: signed app structure, Developer ID, hardened runtime, timestamp, and entitlements"
+SPARKLE="$APP_BUNDLE/Contents/Frameworks/Sparkle.framework"
+[ -d "$SPARKLE" ] || fail "Sparkle.framework is missing"
+SPARKLE_SIGNATURE="$(codesign -dvv "$SPARKLE" 2>&1)"
+grep -q 'Authority=Developer ID Application:' <<< "$SPARKLE_SIGNATURE" \
+    || fail "Sparkle.framework is not signed with Developer ID Application"
+for key in SUFeedURL SUPublicEDKey; do
+    /usr/libexec/PlistBuddy -c "Print :$key" "$INFO_PLIST" >/dev/null 2>&1 \
+        || fail "Info.plist is missing $key, so updates would not work"
+done
+
+echo "PASS: signed app structure, Developer ID, hardened runtime, timestamp, entitlements, and updater"
 
 if [ -z "$DMG_PATH" ]; then
     exit 0

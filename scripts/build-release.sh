@@ -81,6 +81,10 @@ cp "${PROJECT_DIR}/Sources/Resources/icon.icns" "${APP_BUNDLE}/Contents/Resource
 # Copy the SwiftPM resource bundle.
 cp -R "${RESOURCE_BUNDLE}" "${APP_BUNDLE}/Contents/Resources/Redact_Redact.bundle"
 
+# Embed Sparkle, the in-app updater. ditto keeps the framework's symlinks intact.
+mkdir -p "${APP_BUNDLE}/Contents/Frameworks"
+ditto "${RELEASE_BIN_DIR}/Sparkle.framework" "${APP_BUNDLE}/Contents/Frameworks/Sparkle.framework"
+
 # Create PkgInfo
 echo -n "APPL????" > "${APP_BUNDLE}/Contents/PkgInfo"
 
@@ -91,6 +95,19 @@ echo "Size: $(du -sh "${APP_BUNDLE}" | cut -f1)"
 if [ "${MODE}" = "sign" ] || [ "${MODE}" = "dmg" ] || [ "${MODE}" = "release" ]; then
     echo ""
     echo "--- Code signing..."
+
+    # Sign Sparkle from the inside out, as its documentation describes, then the app.
+    # The Downloader service keeps the entitlements Sparkle ships it with.
+    SPARKLE="${APP_BUNDLE}/Contents/Frameworks/Sparkle.framework"
+    codesign --force --options runtime --timestamp --sign "${SIGNING_IDENTITY}" \
+        "${SPARKLE}/Versions/B/XPCServices/Installer.xpc"
+    codesign --force --options runtime --timestamp --preserve-metadata=entitlements \
+        --sign "${SIGNING_IDENTITY}" "${SPARKLE}/Versions/B/XPCServices/Downloader.xpc"
+    codesign --force --options runtime --timestamp --sign "${SIGNING_IDENTITY}" \
+        "${SPARKLE}/Versions/B/Autoupdate"
+    codesign --force --options runtime --timestamp --sign "${SIGNING_IDENTITY}" \
+        "${SPARKLE}/Versions/B/Updater.app"
+    codesign --force --options runtime --timestamp --sign "${SIGNING_IDENTITY}" "${SPARKLE}"
 
     # Sign the app bundle (resource bundle has no code, doesn't need separate signing)
     codesign --force --options runtime --timestamp \

@@ -69,7 +69,7 @@ Install FFmpeg first:
 brew install ffmpeg
 ```
 
-Open the Redact DMG, drag Redact to Applications, and launch it.
+Open the Redact DMG, drag Redact to Applications, and launch it. From 2.0.1 on, Redact checks for new versions and offers to install them; you can also choose **Redact > Check for Updates…**.
 
 Redact 2 is built for Apple Silicon and requires macOS 14 or newer. It is distributed outside the Mac App Store and uses a user-installed FFmpeg executable for media processing.
 
@@ -96,7 +96,10 @@ Release helpers live in `scripts/`:
 ./scripts/build-release.sh sign
 ./scripts/build-release.sh dmg
 ./scripts/build-release.sh release
+./scripts/make-appcast.sh <dmg> <download-url> <release-notes.md>
 ```
+
+Updates use [Sparkle](https://sparkle-project.org). `make-appcast.sh` writes `appcast.xml` for a notarized DMG, signed with the update key in the login keychain; upload it to the same GitHub release as the DMG.
 
 ## Feedback
 
