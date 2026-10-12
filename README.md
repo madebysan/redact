@@ -5,7 +5,7 @@
 <p>Edit videos by trimming the transcript.<br>
 Cut takes, tighten pauses, clean up speech, and export without a timeline.</p>
 
-<p><strong>Version 2.0.0</strong> · macOS 14+ · Apple Silicon</p>
+<p><strong>Version 2.0.1</strong> · macOS 14+ · Apple Silicon</p>
 
 <p>
   <img src="https://img.shields.io/badge/Swift-f05138" alt="Swift">
@@ -107,6 +107,6 @@ Found a bug or have a feature idea? [Open an issue](https://github.com/madebysan
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE). Open-source components and their licenses are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 Made by [santiagoalonso.com](https://santiagoalonso.com)

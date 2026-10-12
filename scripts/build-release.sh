@@ -81,6 +81,9 @@ cp "${PROJECT_DIR}/Sources/Resources/icon.icns" "${APP_BUNDLE}/Contents/Resource
 # Copy the SwiftPM resource bundle.
 cp -R "${RESOURCE_BUNDLE}" "${APP_BUNDLE}/Contents/Resources/Redact_Redact.bundle"
 
+# Ship the open-source license notices inside the app.
+cp "${PROJECT_DIR}/THIRD_PARTY_NOTICES.md" "${APP_BUNDLE}/Contents/Resources/THIRD_PARTY_NOTICES.md"
+
 # Embed Sparkle, the in-app updater. ditto keeps the framework's symlinks intact.
 mkdir -p "${APP_BUNDLE}/Contents/Frameworks"
 ditto "${RELEASE_BIN_DIR}/Sparkle.framework" "${APP_BUNDLE}/Contents/Frameworks/Sparkle.framework"
@@ -135,6 +138,7 @@ if [ "${MODE}" = "dmg" ] || [ "${MODE}" = "release" ]; then
     # Copy README and LICENSE
     cp "${PROJECT_DIR}/README.md" "${DMG_STAGING}/README.md"
     cp "${PROJECT_DIR}/LICENSE" "${DMG_STAGING}/LICENSE"
+    cp "${PROJECT_DIR}/THIRD_PARTY_NOTICES.md" "${DMG_STAGING}/THIRD_PARTY_NOTICES.md"
 
     # Create Applications symlink
     ln -s /Applications "${DMG_STAGING}/Applications"
