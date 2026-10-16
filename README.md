@@ -16,97 +16,28 @@ Cut takes, tighten pauses, clean up speech, and export without a timeline.</p>
 
 <p><a href="https://github.com/madebysan/redact/releases/latest">Download Redact</a></p>
 
-![Redact 2 intro showing its welcome tour and transcript-first editing workflow](assets/intro.gif)
+![Redact's welcome tour introducing transcript-first editing](assets/intro.gif)
 
-Redact is a native macOS editor for podcasts, interviews, tutorials, pitch videos, and other spoken media. Instead of cutting clips on a timeline, you edit the transcript and preview the result.
+Redact is a Mac editor for podcasts, interviews, tutorials and other spoken media: you edit the words, and the video follows.
 
-## Core features
-
-### Edit with Codex or Claude Code
-
-Prepare a privacy-safe transcript snapshot, paste the connection prompt into Codex or Claude Code, and describe the edit you want. Redact shows the proposed cuts and new duration before applying everything as one undoable edit.
-
-![Edit with Agent dialog for connecting Redact to Codex or Claude Code](assets/edit-with-agent.png)
-
-### Auto-trim pauses and filler words
-
-Clean Up finds clear filler words, repeated words, and long pauses. Review every suggestion, choose what to keep, and apply the selected changes in one click.
-
-![Automatic transcript cleanup with suggested repeated-word and long-pause edits](assets/automatic-cleanup.png)
-
-### Select, delete, and export
-
-Highlight words and press Delete. Preview the finished pacing, restore any cut, then export the result as video, audio, or adjusted subtitles.
-
-![Redact editor showing deleted transcript ranges, cut markers, and the final duration](assets/select-delete-export.png)
+- Select words in the transcript and press Delete to cut them.
+- Clean Up finds filler words, repeats and long pauses for you to review.
+- Ask Codex or Claude Code for an edit and approve the proposed cuts.
 
 ## How it works
 
-1. Import a video or audio file.
-2. Redact transcribes it locally with [WhisperKit](https://github.com/argmaxinc/WhisperKit).
-3. Delete words, run automatic cleanup, or ask Codex or Claude Code to propose an edit.
-4. Preview, save, and export.
+Import a video or audio file and Redact transcribes it on your Mac with [WhisperKit](https://github.com/argmaxinc/WhisperKit). Delete words, run Clean Up, or describe an edit to an agent; every change previews before you apply it and can be undone. Export as MP4, MKV, WebM, M4A, MP3 or WAV, or as subtitles with adjusted timing. Features, formats and preferences are in [docs/how-it-works.md](docs/how-it-works.md).
 
-Your normal editing workflow stays on your Mac. Agent editing is opt-in and shares only a sanitized transcript snapshot with the cloud agent you choose, never the source media or project paths.
+## Privacy
 
-## Export formats
-
-| Output | Video | Audio |
-|---|---|---|
-| MP4 | H.264 | AAC |
-| MKV | H.264 | AAC |
-| WebM | VP9 | Opus |
-| M4A | — | AAC |
-| MP3 | — | MP3 |
-| WAV | — | PCM |
-| SRT | Adjusted subtitle timing | — |
+Transcription and editing stay on your Mac. Agent editing is opt-in and shares only a transcript snapshot with the agent you choose, never the media or file paths. Redact checks for updates through [Sparkle](https://sparkle-project.org).
 
 ## Install
 
-Install FFmpeg first:
+Install FFmpeg first (`brew install ffmpeg`), then download Redact from the [latest release](https://github.com/madebysan/redact/releases/latest) and drag it to Applications. It needs Apple Silicon and macOS 14. To build it, run `./script/build_and_run.sh`.
 
-```bash
-brew install ffmpeg
-```
+---
 
-Open the Redact DMG, drag Redact to Applications, and launch it. From 2.0.1 on, Redact checks for new versions and offers to install them; you can also choose **Redact > Check for Updates…**.
-
-Redact 2 is built for Apple Silicon and requires macOS 14 or newer. It is distributed outside the Mac App Store and uses a user-installed FFmpeg executable for media processing.
-
-## Preferences
-
-Redact includes keyboard shortcuts for common editing, playback, project, and export actions.
-
-Redact uses a dark interface only. Settings include a dropdown of 14 built-in macOS transcript fonts with adjustable text size, letter spacing, line spacing, playback highlight color, a transcript-only Restore Defaults action, and clearly labeled Whisper model trade-offs. Format, quality, speed, audio enhancement, and optional subtitle export are remembered for the next compatible export.
-
-## Build from source
-
-From the repository root:
-
-```bash
-brew install ffmpeg
-./script/build_and_run.sh
-```
-
-The native UI uses Swift and AppKit. AVFoundation handles preview playback and timeline mapping, [DSWaveformImage](https://github.com/dmrschmidt/DSWaveformImage) renders the waveform, and FFmpeg handles extraction and final media export.
-
-Release helpers live in `scripts/`:
-
-```bash
-./scripts/build-release.sh sign
-./scripts/build-release.sh dmg
-./scripts/build-release.sh release
-./scripts/make-appcast.sh <dmg> <download-url> <release-notes.md>
-```
-
-Updates use [Sparkle](https://sparkle-project.org). `make-appcast.sh` writes `appcast.xml` for a notarized DMG, signed with the update key in the login keychain; upload it to the same GitHub release as the DMG.
-
-## Feedback
-
-Found a bug or have a feature idea? [Open an issue](https://github.com/madebysan/redact/issues).
-
-## License
-
-[MIT](LICENSE). Open-source components and their licenses are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+[MIT](LICENSE). Third-party components and their licenses are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 Made by [santiagoalonso.com](https://santiagoalonso.com)
