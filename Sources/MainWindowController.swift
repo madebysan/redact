@@ -1472,7 +1472,32 @@ final class MainWindowController: NSWindowController {
             guard let self, let word = self.project.word(withID: wordID) else { return }
             self.presentCorrection(for: word)
         }
+        #if DEBUG
+        ScreenshotMode.shared?.editorDidLoad(self)
+        #endif
     }
+
+    #if DEBUG
+    /// Fixed demo edits for README screenshots: fillers removed, one sentence cut,
+    /// playback parked mid-paragraph, and the requested sheet opened.
+    func stageScreenshotDemo(_ state: ScreenshotMode.State) {
+        if state != .cleanup {
+            let fillers = TranscriptCleanupAnalyzer.suggestions(for: project.allWords)
+                .filter { $0.kind == .fillerWords && $0.isSelectable }
+                .flatMap(\.wordIDs)
+            setWords(Set(fillers), deleted: true)
+            if let transcriptView = splitViewController.transcriptView, transcriptView.rows.count > 6 {
+                transcriptView.toggleRow(6)
+            }
+        }
+        playbackController.seekToSourceTime(33.2)
+        switch state {
+        case .editing: break
+        case .cleanup: cleanUpTranscript(nil)
+        case .agent: editWithAgent(nil)
+        }
+    }
+    #endif
 
     private func updateEditReview(using renderPlan: RenderPlan) {
         let model = EditReviewModel(

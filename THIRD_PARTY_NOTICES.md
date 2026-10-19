@@ -19,6 +19,10 @@ Redact doesn't include FFmpeg in the app bundle. It uses a copy you installed yo
 
 Whisper models download on first use from Argmax's `argmaxinc/whisperkit-coreml` repository on Hugging Face; OpenAI released Whisper under the MIT license.
 
+## README and docs screenshots
+
+The screenshots in `assets/screenshot*.png` show Redact editing the full-length (2:58) trailer for *His Girl Friday* (1940, directed by Howard Hawks, Columbia Pictures). The trailer is in the public domain; source: [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:His_Girl_Friday_(1940)_by_Howard_Hawks,_Trailer.webm), where it is marked public domain. The video itself is not included in this repository; `scripts/readme-screenshots.sh` downloads it and checks its SHA-1 against the one Commons publishes.
+
 ## WhisperKit 0.15.0
 
 Source: https://github.com/argmaxinc/WhisperKit

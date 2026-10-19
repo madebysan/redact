@@ -57,6 +57,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             showUntitledDocument()
         }
         NSApp.activate(ignoringOtherApps: true)
+        #if DEBUG
+        if let screenshotMode = ScreenshotMode.shared, let mainWindowController {
+            screenshotMode.begin(with: mainWindowController)
+            return
+        }
+        #endif
         DispatchQueue.main.async { [weak self] in
             self?.presentWelcomeWalkthroughIfNeeded()
         }

@@ -92,8 +92,10 @@ class IconButton: NSButton {
     }
 
     private func updateVisualState() {
-        alphaValue = isEnabled ? 1 : 0.34
-        contentTintColor = isEnabled ? Theme.textPrimary : Theme.textDimmed
+        // Dim disabled symbols once, to about the system's disabled label level on
+        // the dark bar, so the controls stay legible as a set.
+        alphaValue = 1
+        contentTintColor = isEnabled ? Theme.textPrimary : Theme.textPrimary.withAlphaComponent(0.4)
         layer?.backgroundColor = pointerIsInside && isEnabled
             ? Theme.surface3.withAlphaComponent(0.62).cgColor
             : NSColor.clear.cgColor
