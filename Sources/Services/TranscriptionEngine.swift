@@ -162,7 +162,7 @@ private final class WhisperKitTranscriptionBackend: TranscriptionBackend, @unche
                     id: segmentID,
                     words: timings.map {
                         RawWord(
-                            word: $0.word,
+                            word: $0.word.trimmingCharacters(in: .whitespacesAndNewlines),
                             start: Double($0.start),
                             end: Double($0.end),
                             confidence: Double($0.probability)

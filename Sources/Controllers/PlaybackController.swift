@@ -93,6 +93,10 @@ final class PlaybackController {
         }
     }
 
+    var isPlaying: Bool {
+        player.timeControlStatus == .playing || playWhenPreviewInstalls
+    }
+
     func seekToSourceTime(_ sourceTime: Double) {
         seekToEditedTime(activeTimelineMap.editedTime(forSourceTime: sourceTime))
     }

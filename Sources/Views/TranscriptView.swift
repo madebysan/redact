@@ -5,11 +5,39 @@ extension NSAttributedString.Key {
     static let wordID = NSAttributedString.Key("com.redact.wordID")
 }
 
-/// Read-only transcript display with styled text, paragraph breaks at gaps,
-/// dimmed silence tokens, and native TextKit 2 selection.
+/// Read-only transcript laid out as a document: flowing paragraphs in a centered
+/// reading column, each paragraph's start time in the margin, pauses as inline
+/// length chips, all in one TextKit 2 text view so selection, Find, and VoiceOver
+/// work across the whole transcript.
 class TranscriptView: NSView, NSTextViewDelegate, NSGestureRecognizerDelegate {
     private let scrollView = NSScrollView()
-    private let textView: NSTextView
+    private let textView: TranscriptRowTextView
+
+    /// Cut (true) or keep (false) a set of words as one undoable edit.
+    var onSetWordsDeleted: ((Set<String>, Bool) -> Void)?
+    /// Play one sentence's source range.
+    var onPlayRange: ((Double, Double) -> Void)?
+
+    /// Widest the reading column grows; wider windows add margin instead.
+    static let readingColumnWidth: CGFloat = 720
+    /// Room on the leading side for each paragraph's start time.
+    static let timestampMargin: CGFloat = 72
+
+    /// Width kept clear on the trailing side, such as for the floating preview.
+    var trailingReserve: CGFloat = 0 {
+        didSet { if oldValue != trailingReserve { needsLayout = true } }
+    }
+
+    /// Sentence-sized units (at most 10 words) that X and Return act on.
+    private(set) var rows: [TranscriptLine] = []
+    private var rowStarts: [Int] = []
+    /// Character offset and source start time of each paragraph.
+    private(set) var paragraphStarts: [Int] = []
+    private var paragraphTimes: [Double] = []
+    private var pauseRunFirstID: [String: String] = [:]
+    private var pauseRuns: [String: [String]] = [:]
+    /// The sentence holding the selection or the last click.
+    private(set) var activeRow = 0
 
     /// Set by MainWindowController once the project is in editing state.
     weak var project: ProjectDocument?
@@ -83,6 +111,20 @@ class TranscriptView: NSView, NSTextViewDelegate, NSGestureRecognizerDelegate {
         if width > 0, textView.frame.width != width {
             textView.setFrameSize(NSSize(width: width, height: textView.frame.height))
         }
+        // Center the reading column in the space left of anything floating on the
+        // trailing side, keeping room for the paragraph times on the leading side.
+        let minimumLeading = Self.timestampMargin + 16
+        let available = max(0, width - trailingReserve)
+        let leading = max(minimumLeading, (available - Self.readingColumnWidth) / 2)
+        let trailingClearance = trailingReserve > 0 ? trailingReserve + 16 : minimumLeading
+        let columnWidth = max(240, min(Self.readingColumnWidth, width - leading - trailingClearance))
+        if abs(textView.textContainerInset.width - leading) > 0.5 {
+            textView.textContainerInset = NSSize(width: leading, height: 32)
+        }
+        if let container = textView.textContainer, abs(container.size.width - columnWidth) > 0.5 {
+            container.widthTracksTextView = false
+            container.size = NSSize(width: columnWidth, height: CGFloat.greatestFiniteMagnitude)
+        }
     }
 
     /// The background color drawn behind a word, if any.
@@ -96,13 +138,13 @@ class TranscriptView: NSView, NSTextViewDelegate, NSGestureRecognizerDelegate {
     }
 
     override init(frame frameRect: NSRect) {
-        self.textView = NSTextView(usingTextLayoutManager: true)
+        self.textView = TranscriptRowTextView(usingTextLayoutManager: true)
         super.init(frame: frameRect)
         setup()
     }
 
     required init?(coder: NSCoder) {
-        self.textView = NSTextView(usingTextLayoutManager: true)
+        self.textView = TranscriptRowTextView(usingTextLayoutManager: true)
         super.init(coder: coder)
         setup()
     }
@@ -155,8 +197,9 @@ class TranscriptView: NSView, NSTextViewDelegate, NSGestureRecognizerDelegate {
         textView.textContainer?.lineFragmentPadding = 0
         textView.setAccessibilityLabel("Transcript")
         textView.setAccessibilityHelp(
-            "Select transcript words to edit, copy, or search. Double-click a spoken word to correct its text. Deleted words are struck through and can be clicked to restore."
+            "Select words to edit, copy, or search. X cuts or keeps the sentence you are in, and Return plays it. Click a pause to tighten it. Double-click a spoken word to correct its text. Deleted words are struck through and can be clicked to restore."
         )
+        textView.rowOwner = self
 
         scrollView.documentView = textView
         // A programmatic NSTextView starts with a zero-width frame. Without an
@@ -186,67 +229,92 @@ class TranscriptView: NSView, NSTextViewDelegate, NSGestureRecognizerDelegate {
         var selectionSpans: [TranscriptSelectionSpan] = []
         currentlyHighlightedId = nil
         lastAppearance = [:]
+        pauseRunFirstID = [:]
+        pauseRuns = [:]
+        rowStarts = []
+        paragraphStarts = []
+        paragraphTimes = []
 
-        let lines = computeLines(segments: segments)
+        rows = computeLines(segments: segments)
         let textStorage = NSMutableAttributedString()
         let settings = Settings.shared
         let fontSize = settings.transcriptFontSize
 
-        let lineStyle = NSMutableParagraphStyle()
-        lineStyle.paragraphSpacing = settings.transcriptLineSpacing
-        lineStyle.paragraphSpacingBefore = 0
-        lineStyle.firstLineHeadIndent = 56            // room for timestamp + future drag handle
-        lineStyle.headIndent = 56                     // wrapped lines align under body
-        lineStyle.lineSpacing = settings.transcriptLineSpacing * 0.2
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.paragraphSpacing = max(14, fontSize)
+        paragraphStyle.lineSpacing = settings.transcriptLineSpacing + 3
 
         let normalAttrs: [NSAttributedString.Key: Any] = [
             .font: settings.transcriptFont(ofSize: fontSize, weight: .regular),
             .kern: settings.transcriptLetterSpacing,
             .foregroundColor: Theme.wordNormal,
-            .paragraphStyle: lineStyle,
+            .paragraphStyle: paragraphStyle,
         ]
 
-        let silenceAttrs: [NSAttributedString.Key: Any] = [
-            .font: settings.transcriptFont(ofSize: fontSize - 2, weight: .light),
-            .kern: settings.transcriptLetterSpacing,
-            .foregroundColor: Theme.silenceText,
-            .paragraphStyle: lineStyle,
-        ]
-
-        let timestampAttrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedDigitSystemFont(ofSize: fontSize - 3, weight: .regular),
-            .foregroundColor: Theme.textDimmed,
-            .paragraphStyle: lineStyle,
-        ]
-
-        for (lineIndex, line) in lines.enumerated() {
-            if lineIndex > 0 {
-                textStorage.append(NSAttributedString(string: "\n", attributes: normalAttrs))
-            }
-
-            // Timestamp prefix — clickable space but no .wordID, so clicks fall through.
-            let timestamp = formatTime(line.startTime)
-            textStorage.append(NSAttributedString(string: "\(timestamp)   ", attributes: timestampAttrs))
-
-            for (wordIndex, word) in line.words.enumerated() {
-                displayedWords.append(word)
-
-                if wordIndex > 0 {
+        var sentencesInParagraph = 0
+        for (rowIndex, row) in rows.enumerated() {
+            if rowIndex == 0 {
+                paragraphStarts.append(0)
+                paragraphTimes.append(row.startTime)
+            } else {
+                let previous = rows[rowIndex - 1]
+                let endedSentence = previous.words.last(where: { !$0.isActualSilence }).map { endsSentence($0.word) } ?? false
+                let endedOnPause = previous.words.last?.isActualSilence == true
+                if endedSentence { sentencesInParagraph += 1 }
+                // A paragraph closes after three sentences, or at a pause once two have passed.
+                if endedSentence && (sentencesInParagraph >= 3 || (endedOnPause && sentencesInParagraph >= 2)) {
+                    textStorage.append(NSAttributedString(string: "\n", attributes: normalAttrs))
+                    paragraphStarts.append(textStorage.length)
+                    paragraphTimes.append(row.startTime)
+                    sentencesInParagraph = 0
+                } else {
                     textStorage.append(NSAttributedString(string: " ", attributes: normalAttrs))
                 }
+            }
+            rowStarts.append(textStorage.length)
 
-                var wordAttrs = word.isActualSilence ? silenceAttrs : normalAttrs
+            var position = 0
+            var isFirstToken = true
+            while position < row.words.count {
+                let word = row.words[position]
+                if !isFirstToken {
+                    textStorage.append(NSAttributedString(string: " ", attributes: normalAttrs))
+                }
+                isFirstToken = false
+
+                if word.isActualSilence {
+                    // A run of silence tokens renders as one length chip owned by its first token.
+                    var run: [Word] = []
+                    while position < row.words.count, row.words[position].isActualSilence {
+                        run.append(row.words[position])
+                        position += 1
+                    }
+                    let runIDs = run.map(\.id)
+                    pauseRuns[word.id] = runIDs
+                    runIDs.forEach { pauseRunFirstID[$0] = word.id }
+                    let length = (run.last?.end ?? word.end) - word.start
+                    let label = "\u{2009}" + String(format: "%.1fs", length) + "\u{2009}"
+                    var chipAttrs = Self.pauseChipAttributes(fontSize: fontSize, style: paragraphStyle)
+                    chipAttrs[.wordID] = word.id
+                    let range = NSRange(location: textStorage.length, length: (label as NSString).length)
+                    textStorage.append(NSAttributedString(string: label, attributes: chipAttrs))
+                    selectionSpans.append(TranscriptSelectionSpan(wordID: word.id, range: range))
+                    displayedWords.append(word)
+                    continue
+                }
+
+                var wordAttrs = normalAttrs
                 wordAttrs[.wordID] = word.id
-
-                let range = NSRange(
-                    location: textStorage.length,
-                    length: (word.word as NSString).length
-                )
-                textStorage.append(NSAttributedString(string: word.word, attributes: wordAttrs))
+                let shown = Self.displayText(word.word)
+                let range = NSRange(location: textStorage.length, length: (shown as NSString).length)
+                textStorage.append(NSAttributedString(string: shown, attributes: wordAttrs))
                 selectionSpans.append(TranscriptSelectionSpan(wordID: word.id, range: range))
+                displayedWords.append(word)
+                position += 1
             }
         }
 
+        activeRow = min(activeRow, max(0, rows.count - 1))
         selectionIndex = TranscriptSelectionIndex(spans: selectionSpans)
         isSynchronizingSelection = true
         textView.textStorage?.setAttributedString(textStorage)
@@ -257,6 +325,104 @@ class TranscriptView: NSView, NSTextViewDelegate, NSGestureRecognizerDelegate {
             ? [NSValue(range: NSRange(location: 0, length: 0))]
             : preservedRanges.map(NSValue.init(range:))
         isSynchronizingSelection = false
+        textView.needsDisplay = true
+        needsLayout = true
+    }
+
+    /// Word text as shown: transcription can carry a leading space, and the view adds its own.
+    static func displayText(_ text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? text : trimmed
+    }
+
+    private static func pauseChipAttributes(fontSize: CGFloat, style: NSParagraphStyle) -> [NSAttributedString.Key: Any] {
+        [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: max(9, fontSize - 4), weight: .semibold),
+            .foregroundColor: Theme.textSecondary,
+            .backgroundColor: Theme.surface3,
+            .baselineOffset: 1,
+            .paragraphStyle: style,
+            .toolTip: "Pause. Click to tighten it, or click again to restore it.",
+        ]
+    }
+
+    // MARK: - Sentences and paragraphs
+
+    /// Index of the last start at or before an offset (binary search).
+    private static func index(in starts: [Int], atOrBefore offset: Int) -> Int {
+        var low = 0, high = starts.count - 1, found = 0
+        while low <= high {
+            let mid = (low + high) / 2
+            if starts[mid] <= offset { found = mid; low = mid + 1 } else { high = mid - 1 }
+        }
+        return found
+    }
+
+    fileprivate func rowIndex(forCharacterOffset offset: Int) -> Int {
+        Self.index(in: rowStarts, atOrBefore: offset)
+    }
+
+    enum RowState { case keep, cut, partial }
+
+    func rowState(_ index: Int) -> RowState {
+        guard rows.indices.contains(index), let project else { return .keep }
+        let cut = rows[index].words.filter { project.word(withID: $0.id)?.deleted == true }.count
+        if cut == 0 { return .keep }
+        return cut == rows[index].words.count ? .cut : .partial
+    }
+
+    /// Cut a sentence, or keep it again if it is already fully cut.
+    func toggleRow(_ index: Int) {
+        guard rows.indices.contains(index) else { return }
+        onSetWordsDeleted?(Set(rows[index].words.map(\.id)), rowState(index) != .cut)
+    }
+
+    fileprivate func toggleActiveRow() {
+        toggleRow(activeRow)
+    }
+
+    fileprivate func playActiveRow() {
+        guard rows.indices.contains(activeRow) else { return }
+        onPlayRange?(rows[activeRow].startTime, rows[activeRow].endTime)
+    }
+
+    /// Draw each visible paragraph's start time in the leading margin.
+    fileprivate func drawParagraphTimes(in dirtyRect: NSRect) {
+        guard let layoutManager = textView.textLayoutManager,
+              let contentManager = layoutManager.textContentManager,
+              !paragraphStarts.isEmpty else { return }
+        let origin = textView.textContainerOrigin
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular),
+            .foregroundColor: Theme.textDimmed,
+        ]
+        let top = max(0, dirtyRect.minY - origin.y - 40)
+        let start = layoutManager.textLayoutFragment(for: CGPoint(x: 0, y: top))?.rangeInElement.location
+            ?? layoutManager.documentRange.location
+        layoutManager.enumerateTextLayoutFragments(from: start, options: [.ensuresLayout]) { fragment in
+            let frame = fragment.layoutFragmentFrame.offsetBy(dx: origin.x, dy: origin.y)
+            if frame.minY > dirtyRect.maxY { return false }
+            let offset = contentManager.offset(from: layoutManager.documentRange.location, to: fragment.rangeInElement.location)
+            let paragraph = Self.index(in: self.paragraphStarts, atOrBefore: offset)
+            guard self.paragraphStarts[paragraph] == offset else { return true }
+            let firstLine = fragment.textLineFragments.first
+            let baselineY = frame.minY + (firstLine?.typographicBounds.minY ?? 0) + (firstLine?.glyphOrigin.y ?? 14)
+            let label = formatTime(self.paragraphTimes[paragraph]) as NSString
+            let size = label.size(withAttributes: attrs)
+            label.draw(at: NSPoint(x: frame.minX - Self.timestampMargin + 8, y: baselineY - size.height + 3), withAttributes: attrs)
+            return true
+        }
+    }
+
+    /// Ensure every word ID in a set is mapped onto its row's displayed span:
+    /// any token of a pause run resolves to the run's chip.
+    private func displayedIDs(_ ids: Set<String>) -> Set<String> {
+        Set(ids.map { pauseRunFirstID[$0] ?? $0 })
+    }
+
+    /// Expand selected chip IDs to every token of their pause run.
+    private func expandedIDs(_ ids: [String]) -> [String] {
+        ids.flatMap { pauseRuns[$0] ?? [$0] }
     }
 
     /// Highlight the currently-playing word. O(1) — clears only the previous range.
@@ -267,7 +433,6 @@ class TranscriptView: NSView, NSTextViewDelegate, NSGestureRecognizerDelegate {
 
         let previousID = currentlyHighlightedId
         currentlyHighlightedId = id
-
         if let previousID, let word = project?.word(withID: previousID) {
             updateWordAppearance(
                 wordId: previousID,
@@ -289,8 +454,13 @@ class TranscriptView: NSView, NSTextViewDelegate, NSGestureRecognizerDelegate {
 
     /// Apply visual state for a single word.
     func updateWordAppearance(wordId: String, deleted: Bool, selected: Bool) {
+        let wordId = pauseRunFirstID[wordId] ?? wordId
         guard let storage = textView.textStorage,
               let range = selectionIndex.range(forWordID: wordId) else {
+            return
+        }
+        if let run = pauseRuns[wordId] {
+            updatePauseChipAppearance(run: run, range: range, in: storage, selected: selected)
             return
         }
         let proposed = proposedWordIDs.contains(wordId)
@@ -345,6 +515,29 @@ class TranscriptView: NSView, NSTextViewDelegate, NSGestureRecognizerDelegate {
         }
     }
 
+    private func updatePauseChipAppearance(run: [String], range: NSRange, in storage: NSTextStorage, selected: Bool) {
+        let deleted = run.allSatisfy { project?.word(withID: $0)?.deleted == true }
+        lastAppearance[run[0]] = (deleted, selected, proposedWordIDs.contains(run[0]))
+        storage.removeAttribute(.underlineStyle, range: range)
+        if deleted {
+            storage.addAttributes([
+                .foregroundColor: Theme.textDimmed,
+                .backgroundColor: NSColor.clear,
+                .strikethroughStyle: NSUnderlineStyle.single.rawValue,
+                .strikethroughColor: Theme.wordDeletedStrikethrough.withAlphaComponent(0.6),
+                .toolTip: "Tightened pause. Click to restore it.",
+            ], range: range)
+        } else {
+            storage.addAttributes([
+                .foregroundColor: proposedWordIDs.contains(run[0]) ? Theme.accent : Theme.textSecondary,
+                .backgroundColor: selected ? Theme.wordSelectedBackground : Theme.surface3,
+                .toolTip: "Pause. Click to tighten it, or click again to restore it.",
+            ], range: range)
+            storage.removeAttribute(.strikethroughStyle, range: range)
+            storage.removeAttribute(.strikethroughColor, range: range)
+        }
+    }
+
     /// Diff the full word list against the last appearance snapshot and
     /// update only the words whose visual state actually changed.
     func refreshAllWordAppearances() {
@@ -355,8 +548,7 @@ class TranscriptView: NSView, NSTextViewDelegate, NSGestureRecognizerDelegate {
     /// Update only words affected by an edit or selection delta.
     func updateWordAppearances(wordIDs: Set<String>) {
         guard let project else { return }
-
-        for wordID in wordIDs {
+        for wordID in displayedIDs(wordIDs) {
             guard let word = project.word(withID: wordID) else { continue }
             let isSelected = project.selectedWordIds.contains(wordID)
             let isProposed = proposedWordIDs.contains(wordID)
@@ -374,6 +566,7 @@ class TranscriptView: NSView, NSTextViewDelegate, NSGestureRecognizerDelegate {
     }
 
     func setProposedWordIDs(_ wordIDs: Set<String>) {
+        let wordIDs = displayedIDs(wordIDs).union(wordIDs)
         let changedWordIDs = proposedWordIDs.symmetricDifference(wordIDs)
         proposedWordIDs = wordIDs
         updateWordAppearances(wordIDs: changedWordIDs)
@@ -413,8 +606,11 @@ class TranscriptView: NSView, NSTextViewDelegate, NSGestureRecognizerDelegate {
     func textViewDidChangeSelection(_ notification: Notification) {
         guard !isSynchronizingSelection, let project else { return }
 
-        let selectedIDs = selectionIndex
-            .wordIDs(intersecting: textView.selectedRanges.map(\.rangeValue))
+        if let location = textView.selectedRanges.first?.rangeValue.location, !rowStarts.isEmpty {
+            activeRow = rowIndex(forCharacterOffset: location)
+        }
+        let selectedIDs = expandedIDs(selectionIndex
+            .wordIDs(intersecting: textView.selectedRanges.map(\.rangeValue)))
         let appearanceChanges = project.selectWords(selectedIDs)
         updateWordAppearances(wordIDs: appearanceChanges)
     }
@@ -451,6 +647,7 @@ class TranscriptView: NSView, NSTextViewDelegate, NSGestureRecognizerDelegate {
     /// follow it. Timing, selection IDs, and edit decisions remain unchanged.
     @discardableResult
     func updateCorrectedWord(id: String, text: String, segments: [Segment]) -> Bool {
+        let text = Self.displayText(text)
         guard let storage = textView.textStorage,
               let range = selectionIndex.range(forWordID: id),
               range.location < storage.length,
@@ -472,6 +669,11 @@ class TranscriptView: NSView, NSTextViewDelegate, NSGestureRecognizerDelegate {
             }
         } else {
             storage.replaceCharacters(in: range, with: text)
+        }
+        let delta = (text as NSString).length - range.length
+        if delta != 0 {
+            rowStarts = rowStarts.map { $0 > range.location ? $0 + delta : $0 }
+            paragraphStarts = paragraphStarts.map { $0 > range.location ? $0 + delta : $0 }
         }
         selectionIndex = selectionIndex.replacingWordText(
             wordID: id,
@@ -498,8 +700,18 @@ class TranscriptView: NSView, NSTextViewDelegate, NSGestureRecognizerDelegate {
 
     @objc private func handleTextClick(_ recognizer: NSClickGestureRecognizer) {
         let point = recognizer.location(in: textView)
+        let index = textView.characterIndexForInsertion(at: point)
+        if !rowStarts.isEmpty {
+            activeRow = rowIndex(forCharacterOffset: max(0, index))
+        }
         guard let wordID = wordId(atTextViewPoint: point),
               let word = project?.word(withID: wordID) else {
+            return
+        }
+        if let run = pauseRuns[wordID] {
+            let allCut = run.allSatisfy { project?.word(withID: $0)?.deleted == true }
+            onSetWordsDeleted?(Set(run), !allCut)
+            clearTranscriptSelection()
             return
         }
 
@@ -721,5 +933,33 @@ struct TranscriptSelectionIndex {
         }
 
         return merged
+    }
+}
+
+// MARK: - Transcript text view
+
+/// The transcript's text view: draws paragraph times in the margin and handles
+/// X (cut or keep the current sentence) and Return (play it) without modifiers.
+final class TranscriptRowTextView: NSTextView {
+    weak var rowOwner: TranscriptView?
+
+    override func drawBackground(in rect: NSRect) {
+        super.drawBackground(in: rect)
+        rowOwner?.drawParagraphTimes(in: rect)
+    }
+
+    override func keyDown(with event: NSEvent) {
+        let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        guard let owner = rowOwner, modifiers.isEmpty else {
+            super.keyDown(with: event)
+            return
+        }
+        if event.keyCode == 36 || event.keyCode == 76 {
+            owner.playActiveRow()
+        } else if event.charactersIgnoringModifiers?.lowercased() == "x" {
+            owner.toggleActiveRow()
+        } else {
+            super.keyDown(with: event)
+        }
     }
 }

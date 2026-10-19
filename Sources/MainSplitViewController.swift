@@ -1,13 +1,11 @@
 import AppKit
 
+/// The editing window's content: a full-width reading surface with cleanup
+/// toggles above the transcript, a floating preview over it, and the waveform
+/// strip along the bottom.
 class MainSplitViewController: NSViewController {
-    private static let previewFractionPreferenceKey = "editor.previewFraction"
-    private static let defaultPreviewFraction: CGFloat = 0.35
-
     private let preferences: UserDefaults
-    private var previewFraction: CGFloat
     private var previewCollapsed = false
-    private var lastContainerWidth: CGFloat = 0
 
     private var emptyStateView: EmptyStateView!
     private var transcribeProgressView: TranscribeProgressView!
@@ -18,40 +16,26 @@ class MainSplitViewController: NSViewController {
     var onRelinkRequested: (() -> Void)?
     var onCancelImportRequested: (() -> Void)?
 
-    // Editing UI (split layout)
+    // Editing UI
     private(set) var videoPreviewView: VideoPreviewView!
     private(set) var transportControlsView: TransportControlsView!
     private(set) var transcriptView: TranscriptView!
     private(set) var waveformView: WaveformView!
-    private var splitDivider: NSView!
-    private var leftPanel: NSView!
-    private var rightPanel: NSView!
-    private var dragEventMonitor: Any?
-    private var mouseUpEventMonitor: Any?
-
-    /// The constraint that controls the left panel width (draggable).
-    private var leftPanelWidthConstraint: NSLayoutConstraint?
-
-    /// Minimum width for either panel.
-    private let panelMinWidth: CGFloat = 250
+    private(set) var cleanupBarView: CleanupBarView!
+    private(set) var floatingPreview: FloatingPreviewView!
+    private var transcriptPanel: NSView!
+    private var previewTrailing: NSLayoutConstraint?
+    private var previewBottom: NSLayoutConstraint?
 
     private var currentState: AppState = .empty
 
     init(preferences: UserDefaults = .standard) {
         self.preferences = preferences
-        let savedFraction = preferences.object(forKey: Self.previewFractionPreferenceKey) as? NSNumber
-        previewFraction = Self.normalizedPreviewFraction(
-            savedFraction.map { CGFloat($0.doubleValue) } ?? Self.defaultPreviewFraction
-        )
         super.init(nibName: nil, bundle: nil)
     }
 
     required init?(coder: NSCoder) {
         preferences = .standard
-        let savedFraction = preferences.object(forKey: Self.previewFractionPreferenceKey) as? NSNumber
-        previewFraction = Self.normalizedPreviewFraction(
-            savedFraction.map { CGFloat($0.doubleValue) } ?? Self.defaultPreviewFraction
-        )
         super.init(coder: coder)
     }
 
@@ -61,8 +45,7 @@ class MainSplitViewController: NSViewController {
         container.layer?.backgroundColor = Theme.surface0.cgColor
         container.onAppearanceChange = { [weak container, weak self] in
             container?.layer?.backgroundColor = Theme.surface0.cgColor
-            self?.rightPanel?.layer?.backgroundColor = Theme.surface1.cgColor
-            self?.splitDivider?.layer?.backgroundColor = Theme.divider.cgColor
+            self?.transcriptPanel?.layer?.backgroundColor = Theme.surface1.cgColor
         }
         self.view = container
     }
@@ -75,16 +58,7 @@ class MainSplitViewController: NSViewController {
 
     override func viewDidLayout() {
         super.viewDidLayout()
-        guard currentState == .editing, !previewCollapsed, !isDraggingDivider else { return }
-
-        let containerWidth = view.bounds.width
-        guard containerWidth > 0, abs(containerWidth - lastContainerWidth) > 0.5 else { return }
-        leftPanelWidthConstraint?.constant = resolvedPreviewWidth(for: containerWidth)
-        lastContainerWidth = containerWidth
-    }
-
-    deinit {
-        removeDividerEventMonitors()
+        positionFloatingPreview()
     }
 
     private func setupErrorBanner() {
@@ -202,6 +176,9 @@ class MainSplitViewController: NSViewController {
         clearContent()
         currentState = .editing
 
+        // The window uses a full-size content view, so the editor starts below the
+        // title bar's safe area instead of the view's top edge.
+        let safeTop = view.safeAreaLayoutGuide.topAnchor
         let editorTopAnchor: NSLayoutYAxisAnchor
         if showsMissingMediaNotice {
             let noticeView = MissingMediaNoticeView()
@@ -210,109 +187,90 @@ class MainSplitViewController: NSViewController {
             view.addSubview(noticeView)
             missingMediaNoticeView = noticeView
             NSLayoutConstraint.activate([
-                noticeView.topAnchor.constraint(equalTo: view.topAnchor),
+                noticeView.topAnchor.constraint(equalTo: safeTop),
                 noticeView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
                 noticeView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
                 noticeView.heightAnchor.constraint(equalToConstant: 48),
             ])
             editorTopAnchor = noticeView.bottomAnchor
         } else {
-            editorTopAnchor = view.topAnchor
+            editorTopAnchor = safeTop
         }
 
-        // Left panel: video + transport
-        leftPanel = NSView()
-        leftPanel.wantsLayer = true
-        leftPanel.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(leftPanel)
+        // Transcript panel: cleanup toggles over the reading column.
+        transcriptPanel = NSView()
+        transcriptPanel.wantsLayer = true
+        transcriptPanel.layer?.backgroundColor = Theme.surface1.cgColor
+        transcriptPanel.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(transcriptPanel)
 
-        videoPreviewView = VideoPreviewView()
-        videoPreviewView.translatesAutoresizingMaskIntoConstraints = false
-        leftPanel.addSubview(videoPreviewView)
-
-        transportControlsView = TransportControlsView()
-        transportControlsView.translatesAutoresizingMaskIntoConstraints = false
-        leftPanel.addSubview(transportControlsView)
-
-        // Divider (6pt wide hit area, 1pt visible line)
-        splitDivider = DividerView()
-        splitDivider.wantsLayer = true
-        splitDivider.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(splitDivider)
-
-        // Right panel: transcript
-        rightPanel = NSView()
-        rightPanel.wantsLayer = true
-        rightPanel.layer?.backgroundColor = Theme.surface1.cgColor
-        rightPanel.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(rightPanel)
+        cleanupBarView = CleanupBarView()
+        cleanupBarView.translatesAutoresizingMaskIntoConstraints = false
+        transcriptPanel.addSubview(cleanupBarView)
 
         transcriptView = TranscriptView()
         transcriptView.translatesAutoresizingMaskIntoConstraints = false
-        rightPanel.addSubview(transcriptView)
+        transcriptPanel.addSubview(transcriptView)
 
-        // Waveform bar (full width at bottom)
+        // Floating preview over the transcript, anchored from the bottom-trailing corner.
+        floatingPreview = FloatingPreviewView(preferences: preferences)
+        floatingPreview.translatesAutoresizingMaskIntoConstraints = false
+        floatingPreview.isHidden = previewCollapsed
+        floatingPreview.onMove = { [weak self] in self?.positionFloatingPreview() }
+        transcriptPanel.addSubview(floatingPreview)
+        videoPreviewView = floatingPreview.videoView
+        transportControlsView = floatingPreview.transportView
+
         waveformView = WaveformView()
         waveformView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(waveformView)
 
-        // Preview starts smaller than the transcript and restores the user's ratio.
-        let initialWidth = previewCollapsed ? 0 : resolvedPreviewWidth(for: view.bounds.width)
-        let widthConstraint = leftPanel.widthAnchor.constraint(equalToConstant: initialWidth)
-        leftPanelWidthConstraint = widthConstraint
-        leftPanel.isHidden = previewCollapsed
-        splitDivider.isHidden = previewCollapsed
-        lastContainerWidth = view.bounds.width
+        let trailing = floatingPreview.trailingAnchor.constraint(equalTo: transcriptPanel.trailingAnchor)
+        let bottom = floatingPreview.bottomAnchor.constraint(equalTo: transcriptPanel.bottomAnchor)
+        previewTrailing = trailing
+        previewBottom = bottom
 
         NSLayoutConstraint.activate([
-            // Waveform bar: 60pt at bottom, full width
             waveformView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             waveformView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             waveformView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             waveformView.heightAnchor.constraint(equalToConstant: 60),
 
-            // Left panel: variable width, above waveform
-            leftPanel.topAnchor.constraint(equalTo: editorTopAnchor),
-            leftPanel.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            leftPanel.bottomAnchor.constraint(equalTo: waveformView.topAnchor),
-            widthConstraint,
+            transcriptPanel.topAnchor.constraint(equalTo: editorTopAnchor),
+            transcriptPanel.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            transcriptPanel.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            transcriptPanel.bottomAnchor.constraint(equalTo: waveformView.topAnchor),
 
-            // Video preview (fills top of left panel)
-            videoPreviewView.topAnchor.constraint(equalTo: leftPanel.topAnchor),
-            videoPreviewView.leadingAnchor.constraint(equalTo: leftPanel.leadingAnchor),
-            videoPreviewView.trailingAnchor.constraint(equalTo: leftPanel.trailingAnchor),
-            videoPreviewView.bottomAnchor.constraint(equalTo: transportControlsView.topAnchor),
+            cleanupBarView.topAnchor.constraint(equalTo: transcriptPanel.topAnchor),
+            cleanupBarView.leadingAnchor.constraint(equalTo: transcriptPanel.leadingAnchor),
+            cleanupBarView.trailingAnchor.constraint(equalTo: transcriptPanel.trailingAnchor),
+            cleanupBarView.heightAnchor.constraint(equalToConstant: CleanupBarView.height),
 
-            // Transport controls (84pt at bottom of left panel)
-            transportControlsView.leadingAnchor.constraint(equalTo: leftPanel.leadingAnchor),
-            transportControlsView.trailingAnchor.constraint(equalTo: leftPanel.trailingAnchor),
-            transportControlsView.bottomAnchor.constraint(equalTo: leftPanel.bottomAnchor),
-            transportControlsView.heightAnchor.constraint(equalToConstant: 84),
+            transcriptView.topAnchor.constraint(equalTo: cleanupBarView.bottomAnchor),
+            transcriptView.leadingAnchor.constraint(equalTo: transcriptPanel.leadingAnchor),
+            transcriptView.trailingAnchor.constraint(equalTo: transcriptPanel.trailingAnchor),
+            transcriptView.bottomAnchor.constraint(equalTo: transcriptPanel.bottomAnchor),
 
-            // Divider (6pt wide for easy grabbing)
-            splitDivider.topAnchor.constraint(equalTo: editorTopAnchor),
-            splitDivider.bottomAnchor.constraint(equalTo: waveformView.topAnchor),
-            splitDivider.leadingAnchor.constraint(equalTo: leftPanel.trailingAnchor, constant: -3),
-            splitDivider.widthAnchor.constraint(equalToConstant: 6),
-
-            // Right panel: fills remaining width, above waveform
-            rightPanel.topAnchor.constraint(equalTo: editorTopAnchor),
-            rightPanel.leadingAnchor.constraint(equalTo: leftPanel.trailingAnchor),
-            rightPanel.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            rightPanel.bottomAnchor.constraint(equalTo: waveformView.topAnchor),
-
-            // Transcript fills right panel
-            transcriptView.topAnchor.constraint(equalTo: rightPanel.topAnchor),
-            transcriptView.leadingAnchor.constraint(equalTo: rightPanel.leadingAnchor),
-            transcriptView.trailingAnchor.constraint(equalTo: rightPanel.trailingAnchor),
-            transcriptView.bottomAnchor.constraint(equalTo: rightPanel.bottomAnchor),
+            trailing,
+            bottom,
         ])
-
-        // Setup divider dragging
-        setupDividerDragging()
+        positionFloatingPreview()
 
         transcriptView.setTranscript(segments: segments)
         transcriptView.focusForKeyboardNavigation()
+    }
+
+    /// Apply the preview's remembered offset, kept inside the transcript panel.
+    private func positionFloatingPreview() {
+        guard let floatingPreview, let transcriptPanel else { return }
+        if transcriptPanel.bounds.width > 0 {
+            floatingPreview.clampOffset(in: transcriptPanel.bounds)
+        }
+        previewTrailing?.constant = -floatingPreview.offset.x
+        previewBottom?.constant = -floatingPreview.offset.y
+        // Keep the reading column clear of the preview while it sits in the right half.
+        let docked = !floatingPreview.isHidden && floatingPreview.offset.x < transcriptPanel.bounds.width / 2
+        transcriptView?.trailingReserve = docked ? floatingPreview.panelWidth + floatingPreview.offset.x : 0
     }
 
     // MARK: - Editor Layout
@@ -325,12 +283,13 @@ class MainSplitViewController: NSViewController {
         currentState == .editing && transcriptView?.hasKeyboardFocus == true
     }
 
+    /// Width of the floating preview when it is shown; the transcript always spans the window.
     var previewPanelWidth: CGFloat {
-        isPreviewVisible ? (leftPanelWidthConstraint?.constant ?? 0) : 0
+        isPreviewVisible ? (floatingPreview?.panelWidth ?? 0) : 0
     }
 
     var transcriptPanelWidth: CGFloat {
-        max(0, view.bounds.width - previewPanelWidth)
+        transcriptPanel?.bounds.width ?? view.bounds.width
     }
 
     var hasMissingMediaNotice: Bool {
@@ -342,8 +301,8 @@ class MainSplitViewController: NSViewController {
     }
 
     var editorTopInset: CGFloat {
-        guard let leftPanel else { return 0 }
-        return max(0, view.bounds.maxY - leftPanel.frame.maxY)
+        guard let transcriptPanel else { return 0 }
+        return max(0, view.bounds.maxY - transcriptPanel.frame.maxY)
     }
 
     func performMissingMediaAction() {
@@ -352,86 +311,12 @@ class MainSplitViewController: NSViewController {
 
     func togglePreview() {
         guard currentState == .editing else { return }
-
         previewCollapsed.toggle()
-        leftPanel.isHidden = previewCollapsed
-        splitDivider.isHidden = previewCollapsed
-        leftPanelWidthConstraint?.constant = previewCollapsed ? 0 : resolvedPreviewWidth(for: view.bounds.width)
-        view.needsLayout = true
+        floatingPreview?.isHidden = previewCollapsed
+        positionFloatingPreview()
     }
-
-    func resizePreview(to requestedWidth: CGFloat) {
-        guard currentState == .editing, !previewCollapsed else { return }
-
-        let containerWidth = view.bounds.width
-        guard containerWidth > 0 else { return }
-        let clampedWidth = clampedPreviewWidth(requestedWidth, containerWidth: containerWidth)
-        leftPanelWidthConstraint?.constant = clampedWidth
-        previewFraction = Self.normalizedPreviewFraction(clampedWidth / containerWidth)
-        preferences.set(Double(previewFraction), forKey: Self.previewFractionPreferenceKey)
-        lastContainerWidth = containerWidth
-    }
-
-    private func resolvedPreviewWidth(for containerWidth: CGFloat) -> CGFloat {
-        clampedPreviewWidth(containerWidth * previewFraction, containerWidth: containerWidth)
-    }
-
-    private func clampedPreviewWidth(_ requestedWidth: CGFloat, containerWidth: CGFloat) -> CGFloat {
-        guard containerWidth >= panelMinWidth * 2 else { return max(0, containerWidth / 2) }
-        return max(panelMinWidth, min(requestedWidth, containerWidth - panelMinWidth))
-    }
-
-    private static func normalizedPreviewFraction(_ fraction: CGFloat) -> CGFloat {
-        max(0.2, min(fraction, 0.75))
-    }
-
-    // MARK: - Divider Dragging
-
-    private func setupDividerDragging() {
-        removeDividerEventMonitors()
-
-        // Mouse down on divider starts drag
-        dragEventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDragged]) { [weak self] event in
-            guard let self, self.currentState == .editing,
-                  let divider = self.splitDivider,
-                  let eventWindow = event.window,
-                  eventWindow == self.view.window else { return event }
-
-            // Check if drag started near the divider
-            let locationInView = self.view.convert(event.locationInWindow, from: nil)
-            let dividerFrame = divider.frame
-
-            // Only handle drags near the divider (within 20pt for initial grab)
-            if self.isDraggingDivider || abs(locationInView.x - dividerFrame.midX) < 20 {
-                self.isDraggingDivider = true
-                self.resizePreview(to: locationInView.x)
-                return nil // Consume the event
-            }
-            return event
-        }
-
-        mouseUpEventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseUp]) { [weak self] event in
-            self?.isDraggingDivider = false
-            return event
-        }
-    }
-
-    private func removeDividerEventMonitors() {
-        if let dragEventMonitor {
-            NSEvent.removeMonitor(dragEventMonitor)
-            self.dragEventMonitor = nil
-        }
-        if let mouseUpEventMonitor {
-            NSEvent.removeMonitor(mouseUpEventMonitor)
-            self.mouseUpEventMonitor = nil
-        }
-        isDraggingDivider = false
-    }
-
-    private var isDraggingDivider = false
 
     private func clearContent() {
-        removeDividerEventMonitors()
         // Remove all subviews except the error banner
         view.subviews.forEach { subview in
             if subview !== errorBannerView {
@@ -444,12 +329,13 @@ class MainSplitViewController: NSViewController {
         transportControlsView = nil
         transcriptView = nil
         waveformView = nil
+        cleanupBarView = nil
+        floatingPreview = nil
         missingMediaNoticeView = nil
         importCancelButton = nil
-        splitDivider = nil
-        leftPanel = nil
-        rightPanel = nil
-        leftPanelWidthConstraint = nil
+        transcriptPanel = nil
+        previewTrailing = nil
+        previewBottom = nil
     }
 }
 
@@ -464,45 +350,5 @@ private final class ThemedContainerView: NSView {
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         onAppearanceChange?()
-    }
-}
-
-// MARK: - Divider View
-
-/// A thin visible divider line with a wider hit area. Shows resize cursor on hover.
-private class DividerView: NSView {
-    private let lineLayer = CALayer()
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        setup()
-    }
-
-    required init?(coder: NSCoder) {
-        super.init(coder: coder)
-        setup()
-    }
-
-    private func setup() {
-        wantsLayer = true
-
-        // The view is 6pt wide but only the center 1pt line is visible
-        lineLayer.backgroundColor = Theme.divider.cgColor
-        layer?.addSublayer(lineLayer)
-    }
-
-    override func layout() {
-        super.layout()
-        // Center a 1pt line in the 6pt hit area
-        lineLayer.frame = CGRect(x: bounds.midX - 0.5, y: 0, width: 1, height: bounds.height)
-    }
-
-    override func resetCursorRects() {
-        addCursorRect(bounds, cursor: .resizeLeftRight)
-    }
-
-    override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        lineLayer.backgroundColor = Theme.divider.cgColor
     }
 }

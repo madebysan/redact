@@ -8,17 +8,18 @@ struct TranscriptLine: Identifiable, Equatable {
     let words: [Word]
 
     var startTime: Double { words.first?.start ?? 0 }
+    var endTime: Double { words.last?.end ?? 0 }
 }
 
-/// Group the transcript into display lines.
+/// Group the transcript into display rows.
 ///
-/// Splitting rules (first one that fires wins):
-///   - a silence token lives on its own line (visible pause indicator)
-///   - a word that ends a sentence (. ! ?) closes the current line
-///   - 10 words per line max
+/// Splitting rules:
+///   - a word that ends a sentence (. ! ?) closes the current row
+///   - 10 words per row max
+///   - a run of silence tokens joins the end of the row it follows and closes it,
+///     so a pause reads as one inline length chip instead of rows of dashes
 ///
-/// The result is an array of short, coherent lines suitable for rendering
-/// as subtitle-style rows.
+/// The result is an array of short, coherent rows; each can be kept or cut whole.
 func computeLines(segments: [Segment]) -> [TranscriptLine] {
     var lines: [TranscriptLine] = []
     var current: [Word] = []
@@ -32,17 +33,27 @@ func computeLines(segments: [Segment]) -> [TranscriptLine] {
     }
 
     let allWords = segments.flatMap(\.words)
-
-    for word in allWords {
+    var index = 0
+    while index < allWords.count {
+        let word = allWords[index]
         if word.isActualSilence {
-            commit()
-            current.append(word)
+            var run: [Word] = []
+            while index < allWords.count, allWords[index].isActualSilence {
+                run.append(allWords[index])
+                index += 1
+            }
+            if current.isEmpty, let previous = lines.popLast() {
+                // The previous row already closed on a sentence end: the pause trails it.
+                current = previous.words
+                nextId -= 1
+            }
+            current.append(contentsOf: run)
             commit()
             continue
         }
 
         current.append(word)
-
+        index += 1
         let endsSentence = word.word.hasSuffix(".") || word.word.hasSuffix("!") || word.word.hasSuffix("?")
         if endsSentence || current.count >= 10 {
             commit()

@@ -77,18 +77,19 @@ The current implementation uses a practical 4 pt base rhythm with common steps a
 
 - Main window default: 1400 × 900 pt.
 - Main window minimum: 1000 × 700 pt.
-- Editing panels: minimum 250 pt each.
-- Initial preview panel: 35% of window width.
+- Reading column: up to 720 pt, centered in the space left of the floating preview, with a 72 pt leading margin for paragraph times.
+- Floating preview: 400 pt wide (260 pt compact), 20 pt from the trailing and bottom edges by default; size and position are remembered.
+- Cleanup bar: 44 pt above the transcript.
 - Transport row: 84 pt high; waveform row: 60 pt high.
 - Export sheet: 520 × 430 pt, titled, with a right-aligned 104 pt label column and the export summary in the footer beside Cancel and Export.
 - Settings window: 500 pt wide, native preference toolbar with Transcript, Transcription, and Media Tools icon tabs; each pane sizes the window to its content and never scrolls. Reset actions sit in the pane footer, not in the form.
 - Transcript inset: 24 pt on both axes.
-- Transcript row spacing: adjustable 4–18 pt; wrapped-line spacing is one fifth of that value.
+- Transcript line spacing: the 4–18 pt setting plus 3 pt between wrapped lines; paragraphs are separated by the text size (at least 14 pt).
 - Standard sheet/card outer inset: 24 pt.
 - Standard control-row minimum: 36 pt.
 - Error banner: 36 pt high.
 
-The transcript receives the larger share of the default window. The preview remains resizable, collapses completely through View > Hide Preview, and restores the user's saved divider ratio across windows and launches. Side-by-side panels never shrink below a usable 250 pt width.
+The transcript spans the window and reads as a document: paragraphs of about three sentences, each with its start time in the margin, and pauses as inline length chips that tighten on click. The preview floats over the bottom-trailing corner; it can be dragged by its top strip, switched between large and compact, and hidden through View > Hide Preview. X cuts or keeps the sentence holding the selection or the last click, and Return plays it. The waveform strip shows kept ranges as blocks and cuts as hatched red over the audio shape.
 
 ## Layout and responsive behavior
 
@@ -98,7 +99,7 @@ The v2 default hierarchy is:
 
 1. Document and state controls in the native titlebar/toolbar.
 2. Transcript as the dominant scrollable editor.
-3. Adjustable preview and transport as a supporting panel.
+3. A floating preview and transport that never takes width from the transcript.
 4. A shared playback position/waveform treatment derived from the canonical timeline.
 
 The native toolbar uses an opaque unified titlebar at the reference's taller native height, with two 36 pt-tall bordered capsules inspired by compact pro-app command bars. Automatic window tabbing stays disabled so the titlebar remains a single quiet command surface. Clean Up and Agent form the two-icon editing capsule beside the traffic lights using the native toolbar spacing. Save Project, the media-aware Export Video or Export Audio action, Settings, and Close form the four-icon project capsule on the right, with Close always last. Each action uses a 38 × 32 pt icon target, a medium-weight template symbol, a restrained hover fill, a precise tooltip, a VoiceOver label, and an equivalent menu command. Native SF Symbols cover every action except Save Project, which uses a matching monochrome floppy-disk template because macOS does not provide that symbol. The capsules use the existing dark surface and divider tokens; the center remains empty and draggable. The logical window title still carries the project or media name while its visible title stays hidden. Import remains in the empty state and File menu; Undo and Redo remain in the Edit menu with their standard keyboard shortcuts.
@@ -327,3 +328,4 @@ Run `./scripts/run-ui-smoke-tests.sh` after changing the editor shell, menus, tr
 | 2026-10-19 | Stay Apple Silicon only; no Intel Mac or Windows builds. | WhisperKit's Core ML path is what keeps transcription local and fast, and the competitive review showed setup friction and pro handoff matter more to adoption than platform breadth. |
 | 2026-10-19 | Offer EDL and FCPXML cut-list sidecars from the export sheet, derived from the same `RenderPlan` as preview, subtitles, and media export. | Pro editors expect to finish in Premiere, Final Cut Pro, or Resolve; a frame-quantized handoff of the canonical kept ranges preserves the one-edit-one-result rule without adding timeline chrome to Redact. |
 | 2026-10-19 | Install FFmpeg from inside the app on first import or export instead of asking for Homebrew. | The Homebrew step was the main adoption blocker. Redact downloads a pinned, Developer ID-signed static build into Application Support, verifies its published SHA-256 before anything runs, keeps Homebrew's copy working when present, and does not bundle FFmpeg, so the app stays small and its MIT license untouched by the GPL build. |
+| 2026-10-19 | Lay out the editing window as a document: full-width paragraphs, a floating preview, inline cleanup toggles and pause chips. | Chosen on the main-window decision board over side-by-side Studio and row-based Review prototypes; reading the words is the core task, so the transcript gets the whole window and the preview supports it without a fixed column. |

@@ -30,6 +30,8 @@ final class MainWindowController: NSWindowController {
     private var keyEventMonitor: Any?
     private var editReviewModel: EditReviewModel?
     private var currentEditedPlaybackTime: Double = 0
+    /// Set by Return on a row: playback pauses when it reaches this source time.
+    private var playbackStopSourceTime: Double?
     private weak var cleanupToolbarButton: NSButton?
     private weak var agentToolbarButton: NSButton?
     private weak var saveToolbarButton: NSButton?
@@ -891,6 +893,22 @@ final class MainWindowController: NSWindowController {
         updateAfterProjectMutation(changedWordIDs: changedWordIDs, rebuildPreview: true)
     }
 
+    /// Mark each cleanup toggle applied when every word of its kind is cut.
+    private func refreshCleanupBar() {
+        splitViewController.cleanupBarView?.update { [project] id in
+            project.word(withID: id)?.deleted == true
+        }
+    }
+
+    /// Cut or keep a sentence, a pause, or a cleanup category as one undoable edit.
+    func setWords(_ wordIDs: Set<String>, deleted: Bool) {
+        guard project.hasEditableTranscript else { return }
+        let changedWordIDs = project.setWords(wordIDs, deleted: deleted)
+        guard !changedWordIDs.isEmpty else { return }
+        redactDocument?.updateChangeCount(.changeDone)
+        updateAfterProjectMutation(changedWordIDs: changedWordIDs, rebuildPreview: true)
+    }
+
     private func restoreWord(_ wordID: String) {
         guard project.hasEditableTranscript else { return }
         let changedWordIDs = project.restoreWord(wordID)
@@ -963,7 +981,7 @@ final class MainWindowController: NSWindowController {
         if let transcriptView = splitViewController.transcriptView {
             for wordID in changedWordIDs {
                 guard let word = project.word(withID: wordID),
-                      transcriptView.displayedWordText(id: wordID) != word.word else {
+                      transcriptView.displayedWordText(id: wordID) != TranscriptView.displayText(word.word) else {
                     continue
                 }
                 transcriptView.updateCorrectedWord(
@@ -974,6 +992,7 @@ final class MainWindowController: NSWindowController {
             }
             transcriptView.updateWordAppearances(wordIDs: changedWordIDs)
         }
+        refreshCleanupBar()
         guard rebuildPreview, project.appState == .editing else { return }
         guard let renderPlan = project.renderPlan(policy: .mediaV1) else {
             showError("Redact could not rebuild the edited preview.")
@@ -1336,6 +1355,10 @@ final class MainWindowController: NSWindowController {
             )
             self.updateEditNavigationAvailability()
             self.splitViewController.waveformView?.updateCursor(time: position.sourceTime)
+            if let stop = self.playbackStopSourceTime, position.sourceTime >= stop {
+                self.playbackStopSourceTime = nil
+                if self.playbackController.isPlaying { self.playbackController.togglePlayPause() }
+            }
         }
 
         playbackController.onHighlightWord = { [weak self] wordId in
@@ -1421,6 +1444,29 @@ final class MainWindowController: NSWindowController {
         }
         splitViewController.transcriptView?.onRestoreWord = { [weak self] wordID in
             self?.restoreWord(wordID)
+        }
+        let cleanupBar = splitViewController.cleanupBarView
+        cleanupBar?.setCategories(CleanupBarView.categories(
+            from: TranscriptCleanupAnalyzer.suggestions(for: project.allWords)
+        ))
+        cleanupBar?.onPreview = { [weak self] wordIDs in
+            self?.splitViewController.transcriptView?.setProposedWordIDs(wordIDs)
+        }
+        cleanupBar?.onToggle = { [weak self] wordIDs, deleted in
+            self?.setWords(wordIDs, deleted: deleted)
+        }
+        cleanupBar?.onReview = { [weak self] in
+            self?.cleanUpTranscript(nil)
+        }
+        refreshCleanupBar()
+        splitViewController.transcriptView?.onSetWordsDeleted = { [weak self] wordIDs, deleted in
+            self?.setWords(wordIDs, deleted: deleted)
+        }
+        splitViewController.transcriptView?.onPlayRange = { [weak self] start, end in
+            guard let self else { return }
+            self.playbackStopSourceTime = end
+            self.playbackController.seekToSourceTime(start)
+            if !self.playbackController.isPlaying { self.playbackController.togglePlayPause() }
         }
         splitViewController.transcriptView?.onCorrectWord = { [weak self] wordID in
             guard let self, let word = self.project.word(withID: wordID) else { return }

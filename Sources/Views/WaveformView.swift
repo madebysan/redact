@@ -217,26 +217,45 @@ private final class CutMarkerOverlayView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         guard totalDuration > 0, bounds.width > 0 else { return }
+        let x = { (time: Double) in CGFloat(max(0, min(1, time / self.totalDuration))) * self.bounds.width }
+        let blockRect = { (start: Double, end: Double) in
+            NSRect(x: x(start), y: 5, width: max(2, x(end) - x(start)), height: self.bounds.height - 10)
+        }
 
-        let fillColor = Theme.error.withAlphaComponent(0.16)
-        let edgeColor = Theme.error.withAlphaComponent(0.75)
+        // Kept ranges read as blocks over the waveform, separated by the cuts.
+        var keptStart = 0.0
+        let keptFill = NSColor(red: 0.27, green: 0.4, blue: 0.62, alpha: 0.28)
+        let keptEdge = NSColor(red: 0.36, green: 0.5, blue: 0.75, alpha: 0.7)
+        for range in ranges + [TimeRange(start: totalDuration, end: totalDuration)] {
+            if range.start > keptStart + 0.01 {
+                let path = NSBezierPath(roundedRect: blockRect(keptStart, range.start).insetBy(dx: 1, dy: 0), xRadius: 3, yRadius: 3)
+                keptFill.setFill(); path.fill()
+                keptEdge.setStroke(); path.lineWidth = 1; path.stroke()
+            }
+            keptStart = max(keptStart, range.end)
+        }
+
+        // Cuts: hatched red with solid edges, never narrower than 2 pt.
         for range in ranges {
-            let startFraction = max(0, min(1, range.start / totalDuration))
-            let endFraction = max(startFraction, min(1, range.end / totalDuration))
-            let startX = CGFloat(startFraction) * bounds.width
-            let endX = CGFloat(endFraction) * bounds.width
-            let markerRect = NSRect(
-                x: startX,
-                y: 0,
-                width: max(2, endX - startX),
-                height: bounds.height
-            )
-            fillColor.setFill()
-            markerRect.fill()
-
-            edgeColor.setFill()
-            NSRect(x: markerRect.minX, y: 0, width: 1, height: bounds.height).fill()
-            NSRect(x: markerRect.maxX - 1, y: 0, width: 1, height: bounds.height).fill()
+            let rect = blockRect(range.start, range.end)
+            NSGraphicsContext.saveGraphicsState()
+            NSBezierPath(rect: rect).addClip()
+            Theme.error.withAlphaComponent(0.1).setFill()
+            rect.fill()
+            let hatch = NSBezierPath()
+            var hx = rect.minX - rect.height
+            while hx < rect.maxX {
+                hatch.move(to: NSPoint(x: hx, y: rect.minY))
+                hatch.line(to: NSPoint(x: hx + rect.height, y: rect.maxY))
+                hx += 6
+            }
+            Theme.error.withAlphaComponent(0.35).setStroke()
+            hatch.lineWidth = 1.5
+            hatch.stroke()
+            NSGraphicsContext.restoreGraphicsState()
+            Theme.error.withAlphaComponent(0.75).setFill()
+            NSRect(x: rect.minX, y: rect.minY, width: 1, height: rect.height).fill()
+            NSRect(x: rect.maxX - 1, y: rect.minY, width: 1, height: rect.height).fill()
         }
     }
 }

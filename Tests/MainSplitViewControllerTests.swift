@@ -24,45 +24,37 @@ import Testing
     controller.view.layoutSubtreeIfNeeded()
 
     #expect(controller.isPreviewVisible)
-    #expect(abs(controller.previewPanelWidth - 490) < 0.5)
-    #expect(controller.transcriptPanelWidth > controller.previewPanelWidth)
+    #expect(controller.previewPanelWidth == FloatingPreviewView.largeWidth)
+    #expect(abs(controller.transcriptPanelWidth - 1_400) < 0.5)
 }
 
-@Test @MainActor func editorLayoutCollapsesAndRestoresPreview() {
+@Test @MainActor func editorLayoutHidesAndRestoresPreview() {
     let preferences = temporaryPreferences()
     defer { preferences.remove() }
     let controller = MainSplitViewController(preferences: preferences.value)
     controller.view.frame = NSRect(x: 0, y: 0, width: 1_400, height: 900)
     controller.showEditing(segments: [])
 
-    controller.resizePreview(to: 560)
     controller.togglePreview()
-
     #expect(!controller.isPreviewVisible)
     #expect(controller.previewPanelWidth == 0)
-    #expect(controller.transcriptPanelWidth == 1_400)
+    #expect(controller.floatingPreview?.isHidden == true)
 
     controller.togglePreview()
-
     #expect(controller.isPreviewVisible)
-    #expect(abs(controller.previewPanelWidth - 560) < 0.5)
-    #expect(abs(controller.transcriptPanelWidth - 840) < 0.5)
+    #expect(controller.floatingPreview?.isHidden == false)
 }
 
-@Test @MainActor func editorLayoutRestoresSavedPreviewFraction() {
+@Test @MainActor func editorLayoutRemembersCompactPreview() {
     let preferences = temporaryPreferences()
     defer { preferences.remove() }
-    let firstController = MainSplitViewController(preferences: preferences.value)
-    firstController.view.frame = NSRect(x: 0, y: 0, width: 1_400, height: 900)
-    firstController.showEditing(segments: [])
-    firstController.resizePreview(to: 560)
+    preferences.value.set(true, forKey: "editor.previewCompact")
 
-    let restoredController = MainSplitViewController(preferences: preferences.value)
-    restoredController.view.frame = NSRect(x: 0, y: 0, width: 1_000, height: 700)
-    restoredController.showEditing(segments: [])
+    let controller = MainSplitViewController(preferences: preferences.value)
+    controller.view.frame = NSRect(x: 0, y: 0, width: 1_000, height: 700)
+    controller.showEditing(segments: [])
 
-    #expect(abs(restoredController.previewPanelWidth - 400) < 0.5)
-    #expect(abs(restoredController.transcriptPanelWidth - 600) < 0.5)
+    #expect(controller.previewPanelWidth == FloatingPreviewView.smallWidth)
 }
 
 @Test @MainActor func editorShowsPersistentMissingMediaRecoveryAction() {

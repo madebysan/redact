@@ -251,6 +251,23 @@ class ProjectDocument {
         return changedWordIDs
     }
 
+    /// Cut or keep a set of words (a row, a pause, a cleanup category) as one undoable edit.
+    @discardableResult
+    func setWords(_ ids: Set<String>, deleted: Bool) -> Set<String> {
+        let changes = ids.compactMap { id -> (wordId: String, deleted: Bool)? in
+            guard let word = word(withID: id), word.deleted != deleted else { return nil }
+            return (wordId: id, deleted: word.deleted)
+        }
+        guard !changes.isEmpty else { return [] }
+
+        recordUndo(UndoEntry(wordChanges: changes))
+        let changedWordIDs = applyDeletionStates(
+            Dictionary(uniqueKeysWithValues: changes.map { ($0.wordId, deleted) })
+        )
+        if deleted { selectedWordIds.subtract(changedWordIDs) }
+        return changedWordIDs
+    }
+
     @discardableResult
     func restoreWord(_ id: String) -> Set<String> {
         guard let word = word(withID: id), word.deleted else { return [] }
