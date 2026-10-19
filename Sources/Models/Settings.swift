@@ -60,6 +60,8 @@ class Settings {
         static let exportSpeed = "exportSpeed"
         static let exportEnhanceAudio = "exportEnhanceAudio"
         static let exportSubtitles = "exportSubtitles"
+        static let exportEDL = "exportEDL"
+        static let exportFCPXML = "exportFCPXML"
     }
 
     init(defaults: UserDefaults = .standard) {
@@ -272,6 +274,16 @@ class Settings {
     var exportSubtitles: Bool {
         get { defaults.bool(forKey: Key.exportSubtitles) }
         set { defaults.set(newValue, forKey: Key.exportSubtitles) }
+    }
+
+    var exportEDL: Bool {
+        get { defaults.bool(forKey: Key.exportEDL) }
+        set { defaults.set(newValue, forKey: Key.exportEDL) }
+    }
+
+    var exportFCPXML: Bool {
+        get { defaults.bool(forKey: Key.exportFCPXML) }
+        set { defaults.set(newValue, forKey: Key.exportFCPXML) }
     }
 
     // MARK: - Whisper Model

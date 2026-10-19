@@ -31,12 +31,16 @@ Highlight words and press Delete. Preview the finished pacing, restore any cut, 
 | MP3 |: | MP3 |
 | WAV |: | PCM |
 | SRT | Adjusted subtitle timing |: |
+| EDL | CMX3600 cut list |: |
+| FCPXML | Final Cut Pro XML 1.10 cut list |: |
+
+The EDL and FCPXML sidecars hand the edit to another editor instead of rendering it: one event or clip per kept range of the original file, with timecodes at the source frame rate (drop-frame for 29.97 and 59.94) and the source file name for relinking. Premiere Pro and DaVinci Resolve import the EDL; Final Cut Pro and Resolve import the FCPXML. Audio-only sources get only the EDL, at 30 fps non-drop. The cut list describes the cuts at source speed and does not carry the export speed or audio enhancement.
 
 ## Preferences
 
 Redact includes keyboard shortcuts for common editing, playback, project, and export actions.
 
-Redact uses a dark interface only. Settings include a dropdown of 14 built-in macOS transcript fonts with adjustable text size, letter spacing, line spacing, playback highlight color, a transcript-only Restore Defaults action, and clearly labeled Whisper model trade-offs. Format, quality, speed, audio enhancement, and optional subtitle export are remembered for the next compatible export.
+Redact uses a dark interface only. Settings include a dropdown of 14 built-in macOS transcript fonts with adjustable text size, letter spacing, line spacing, playback highlight color, a transcript-only Restore Defaults action, and clearly labeled Whisper model trade-offs. Format, quality, speed, audio enhancement, and the optional subtitle, EDL, and FCPXML sidecars are remembered for the next compatible export.
 
 ## Building and releasing
 

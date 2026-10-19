@@ -45,7 +45,9 @@ launch_app() {
         -exportPresetID mp4-video \
         -exportSpeed 1 \
         -exportEnhanceAudio NO \
-        -exportSubtitles NO
+        -exportSubtitles NO \
+        -exportEDL YES \
+        -exportFCPXML YES
     app_pid=""
     for _ in {1..50}; do
         app_pid="$(pgrep -n -f "$APP_PROCESS_PATTERN" || true)"
@@ -98,6 +100,8 @@ mkdir -p "$MISSING_DIR" "$OUTPUT_DIR"
 rm -f \
     "$OUTPUT_DIR/smoke-subtitles.srt" \
     "$OUTPUT_DIR/smoke-video.mp4" \
+    "$OUTPUT_DIR/smoke-video.edl" \
+    "$OUTPUT_DIR/smoke-video.fcpxml" \
     "$OUTPUT_DIR/smoke-video.mp4.mp3" \
     "$OUTPUT_DIR/smoke-audio.mp3"
 ffmpeg \
@@ -194,6 +198,21 @@ test -s "$OUTPUT_DIR/smoke-audio.mp3"
 ffprobe -v error -show_entries stream=codec_type -of csv=p=0 "$OUTPUT_DIR/smoke-video.mp4" | grep -q '^video$'
 ffprobe -v error -show_entries stream=codec_type -of csv=p=0 "$OUTPUT_DIR/smoke-video.mp4" | grep -q '^audio$'
 ffprobe -v error -show_entries stream=codec_type -of csv=p=0 "$OUTPUT_DIR/smoke-audio.mp3" | grep -q '^audio$'
+
+# Deleting every word leaves the padded head and tail of the 4 s sample:
+# two kept ranges, so two EDL events and two FCPXML clips that together
+# match the exported media duration.
+test -s "$OUTPUT_DIR/smoke-video.edl"
+grep -q '^FCM: NON-DROP FRAME$' "$OUTPUT_DIR/smoke-video.edl"
+test "$(grep -c '^\* FROM CLIP NAME: sample.mov$' "$OUTPUT_DIR/smoke-video.edl")" -eq 2
+test "$(grep -c '^[0-9][0-9][0-9]  AX       AA/V  C        ' "$OUTPUT_DIR/smoke-video.edl")" -eq 2
+test -s "$OUTPUT_DIR/smoke-video.fcpxml"
+xmllint --noout "$OUTPUT_DIR/smoke-video.fcpxml"
+test "$(xmllint --xpath 'count(/fcpxml/library/event/project/sequence/spine/asset-clip)' "$OUTPUT_DIR/smoke-video.fcpxml")" = "2"
+test "$(xmllint --xpath 'count(/fcpxml/resources/asset/media-rep[@kind="original-media"])' "$OUTPUT_DIR/smoke-video.fcpxml")" = "1"
+edl_frames="$(awk '/^[0-9][0-9][0-9]  AX/ { split($8, tc, ":"); frames = ((tc[1] * 60 + tc[2]) * 60 + tc[3]) * 30 + tc[4] } END { print frames }' "$OUTPUT_DIR/smoke-video.edl")"
+video_duration="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$OUTPUT_DIR/smoke-video.mp4")"
+awk -v frames="$edl_frames" -v duration="$video_duration" 'BEGIN { diff = frames / 30 - duration; if (diff < 0) diff = -diff; exit !(diff <= 0.25) }'
 
 kill "$app_pid"
 for _ in {1..50}; do

@@ -2,7 +2,7 @@ import AppKit
 
 /// Modal sheet for export settings and operation progress.
 final class ExportSheetView: NSView {
-    var onExport: ((ExportPreset, String?, Double, Bool, Bool) -> Void)?
+    var onExport: ((ExportPreset, String?, Double, Bool, ExportSidecarOptions) -> Void)?
     var onCancel: (() -> Void)?
     var onCancelExport: (() -> Void)?
     var onDismiss: (() -> Void)?
@@ -14,9 +14,11 @@ final class ExportSheetView: NSView {
     private let enhanceAudioDescriptionLabel = NSTextField(
         wrappingLabelWithString: "Reduces steady background noise and balances loudness in the exported media."
     )
-    private let subtitleSwitch = NSSwitch()
-    private let subtitleDescriptionLabel = NSTextField(
-        wrappingLabelWithString: "Creates a matching .srt subtitle file beside the exported media."
+    private let subtitleCheckbox = NSButton(checkboxWithTitle: "Subtitles (.srt)", target: nil, action: nil)
+    private let edlCheckbox = NSButton(checkboxWithTitle: "Cut list (.edl)", target: nil, action: nil)
+    private let fcpxmlCheckbox = NSButton(checkboxWithTitle: "Final Cut Pro XML", target: nil, action: nil)
+    private let sidecarDescriptionLabel = NSTextField(
+        wrappingLabelWithString: "Written beside the exported media. The cut list and Final Cut Pro XML open the same cuts in Premiere Pro, Final Cut Pro, or DaVinci Resolve."
     )
     private let codecDetailsLabel = NSTextField(wrappingLabelWithString: "")
     private let exportSummaryLabel = NSTextField(labelWithString: "")
@@ -36,6 +38,8 @@ final class ExportSheetView: NSView {
     private let sourceInfo: MediaInfo?
     private let finalDuration: Double
     private let canExportSubtitles: Bool
+    private let canExportCutList: Bool
+    private let canExportFCPXML: Bool
     private let settings: Settings?
     var progressClock: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
 
@@ -44,6 +48,8 @@ final class ExportSheetView: NSView {
         sourceInfo = nil
         finalDuration = 0
         canExportSubtitles = true
+        canExportCutList = true
+        canExportFCPXML = true
         settings = nil
         super.init(frame: frameRect)
         setup()
@@ -55,12 +61,16 @@ final class ExportSheetView: NSView {
         sourceInfo: MediaInfo? = nil,
         finalDuration: Double = 0,
         canExportSubtitles: Bool = true,
+        canExportCutList: Bool = true,
+        canExportFCPXML: Bool = true,
         settings: Settings? = nil
     ) {
         self.presets = presets
         self.sourceInfo = sourceInfo
         self.finalDuration = finalDuration
         self.canExportSubtitles = canExportSubtitles
+        self.canExportCutList = canExportCutList
+        self.canExportFCPXML = canExportFCPXML
         self.settings = settings
         super.init(frame: frameRect)
         setup()
@@ -71,6 +81,8 @@ final class ExportSheetView: NSView {
         sourceInfo = nil
         finalDuration = 0
         canExportSubtitles = true
+        canExportCutList = true
+        canExportFCPXML = true
         settings = nil
         super.init(coder: coder)
         setup()
@@ -141,25 +153,36 @@ final class ExportSheetView: NSView {
         enhanceAudioDescriptionLabel.translatesAutoresizingMaskIntoConstraints = false
         addSubview(enhanceAudioDescriptionLabel)
 
-        let subtitleLabel = makeLabel("Also export subtitles:")
-        subtitleSwitch.state = .off
-        subtitleSwitch.isEnabled = canExportSubtitles
-        subtitleSwitch.toolTip = "Export matching SRT subtitles"
-        subtitleSwitch.setAccessibilityLabel("Also export subtitles")
-        subtitleSwitch.setAccessibilityHelp(
-            "Creates a matching SRT subtitle file beside the exported media."
+        let sidecarLabel = makeLabel("Also export:")
+        configureSidecarCheckbox(
+            subtitleCheckbox,
+            enabled: canExportSubtitles,
+            toolTip: "Export matching SRT subtitles",
+            accessibilityLabel: "Also export subtitles",
+            help: "Creates a matching SRT subtitle file beside the exported media."
         )
-        subtitleSwitch.target = self
-        subtitleSwitch.action = #selector(exportOptionChanged)
-        subtitleSwitch.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(subtitleSwitch)
+        configureSidecarCheckbox(
+            edlCheckbox,
+            enabled: canExportCutList,
+            toolTip: "Export a CMX3600 EDL cut list for Premiere Pro or DaVinci Resolve",
+            accessibilityLabel: "Also export EDL cut list",
+            help: "Creates a CMX3600 edit decision list beside the exported media with one event per kept range."
+        )
+        configureSidecarCheckbox(
+            fcpxmlCheckbox,
+            enabled: canExportFCPXML,
+            toolTip: "Export Final Cut Pro XML for Final Cut Pro or DaVinci Resolve",
+            accessibilityLabel: "Also export Final Cut Pro XML",
+            help: "Creates an FCPXML project beside the exported media with one clip per kept range."
+        )
 
-        subtitleDescriptionLabel.font = .systemFont(ofSize: 11)
-        subtitleDescriptionLabel.textColor = Theme.textTertiary
-        subtitleDescriptionLabel.maximumNumberOfLines = 1
-        subtitleDescriptionLabel.setAccessibilityIdentifier("Subtitle export description")
-        subtitleDescriptionLabel.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(subtitleDescriptionLabel)
+        sidecarDescriptionLabel.font = .systemFont(ofSize: 11)
+        sidecarDescriptionLabel.textColor = Theme.textTertiary
+        sidecarDescriptionLabel.maximumNumberOfLines = 2
+        sidecarDescriptionLabel.preferredMaxLayoutWidth = 472
+        sidecarDescriptionLabel.setAccessibilityIdentifier("Sidecar export description")
+        sidecarDescriptionLabel.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(sidecarDescriptionLabel)
 
         exportVideoButton.title = "Export Video"
         exportVideoButton.bezelStyle = .rounded
@@ -180,8 +203,10 @@ final class ExportSheetView: NSView {
         formatPopup.nextKeyView = qualityPopup
         qualityPopup.nextKeyView = speedPopup
         speedPopup.nextKeyView = enhanceAudioSwitch
-        enhanceAudioSwitch.nextKeyView = subtitleSwitch
-        subtitleSwitch.nextKeyView = exportVideoButton
+        enhanceAudioSwitch.nextKeyView = subtitleCheckbox
+        subtitleCheckbox.nextKeyView = edlCheckbox
+        edlCheckbox.nextKeyView = fcpxmlCheckbox
+        fcpxmlCheckbox.nextKeyView = exportVideoButton
         exportVideoButton.nextKeyView = cancelButton
         cancelButton.nextKeyView = formatPopup
 
@@ -193,7 +218,8 @@ final class ExportSheetView: NSView {
             speedLabel, speedPopup,
             enhanceAudioLabel, enhanceAudioSwitch,
             enhanceAudioDescriptionLabel,
-            subtitleLabel, subtitleSwitch, subtitleDescriptionLabel,
+            sidecarLabel, subtitleCheckbox, edlCheckbox, fcpxmlCheckbox,
+            sidecarDescriptionLabel,
             exportVideoButton, cancelButton,
         ]
 
@@ -246,22 +272,32 @@ final class ExportSheetView: NSView {
                 constant: -24
             ),
 
-            subtitleLabel.topAnchor.constraint(
+            sidecarLabel.topAnchor.constraint(
                 equalTo: enhanceAudioDescriptionLabel.bottomAnchor,
                 constant: 12
             ),
-            subtitleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
-            subtitleSwitch.centerYAnchor.constraint(equalTo: subtitleLabel.centerYAnchor),
-            subtitleSwitch.leadingAnchor.constraint(
-                equalTo: subtitleLabel.trailingAnchor,
+            sidecarLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
+            subtitleCheckbox.centerYAnchor.constraint(equalTo: sidecarLabel.centerYAnchor),
+            subtitleCheckbox.leadingAnchor.constraint(
+                equalTo: sidecarLabel.trailingAnchor,
                 constant: 8
             ),
-            subtitleDescriptionLabel.topAnchor.constraint(
-                equalTo: subtitleLabel.bottomAnchor,
+            edlCheckbox.centerYAnchor.constraint(equalTo: sidecarLabel.centerYAnchor),
+            edlCheckbox.leadingAnchor.constraint(
+                equalTo: subtitleCheckbox.trailingAnchor,
+                constant: 12
+            ),
+            fcpxmlCheckbox.centerYAnchor.constraint(equalTo: sidecarLabel.centerYAnchor),
+            fcpxmlCheckbox.leadingAnchor.constraint(
+                equalTo: edlCheckbox.trailingAnchor,
+                constant: 12
+            ),
+            sidecarDescriptionLabel.topAnchor.constraint(
+                equalTo: sidecarLabel.bottomAnchor,
                 constant: 5
             ),
-            subtitleDescriptionLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
-            subtitleDescriptionLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
+            sidecarDescriptionLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
+            sidecarDescriptionLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
 
             cancelButton.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -20),
             cancelButton.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
@@ -284,6 +320,25 @@ final class ExportSheetView: NSView {
             progressCancelButton.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -20),
             progressCancelButton.centerXAnchor.constraint(equalTo: centerXAnchor),
         ])
+    }
+
+    private func configureSidecarCheckbox(
+        _ checkbox: NSButton,
+        enabled: Bool,
+        toolTip: String,
+        accessibilityLabel: String,
+        help: String
+    ) {
+        checkbox.state = .off
+        checkbox.isEnabled = enabled
+        checkbox.font = .systemFont(ofSize: 13)
+        checkbox.toolTip = toolTip
+        checkbox.setAccessibilityLabel(accessibilityLabel)
+        checkbox.setAccessibilityHelp(help)
+        checkbox.target = self
+        checkbox.action = #selector(exportOptionChanged)
+        checkbox.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(checkbox)
     }
 
     private func makeLabel(_ text: String) -> NSTextField {
@@ -430,8 +485,26 @@ final class ExportSheetView: NSView {
     }
 
     var isSubtitleExportEnabled: Bool {
-        get { subtitleSwitch.state == .on && subtitleSwitch.isEnabled }
-        set { subtitleSwitch.state = newValue && canExportSubtitles ? .on : .off }
+        get { subtitleCheckbox.state == .on && subtitleCheckbox.isEnabled }
+        set { subtitleCheckbox.state = newValue && canExportSubtitles ? .on : .off }
+    }
+
+    var isCutListExportEnabled: Bool {
+        get { edlCheckbox.state == .on && edlCheckbox.isEnabled }
+        set { edlCheckbox.state = newValue && canExportCutList ? .on : .off }
+    }
+
+    var isFCPXMLExportEnabled: Bool {
+        get { fcpxmlCheckbox.state == .on && fcpxmlCheckbox.isEnabled }
+        set { fcpxmlCheckbox.state = newValue && canExportFCPXML ? .on : .off }
+    }
+
+    var sidecarOptions: ExportSidecarOptions {
+        ExportSidecarOptions(
+            subtitles: isSubtitleExportEnabled,
+            edl: isCutListExportEnabled,
+            fcpxml: isFCPXMLExportEnabled
+        )
     }
 
     var exportSummaryText: String {
@@ -450,12 +523,14 @@ final class ExportSheetView: NSView {
         settings?.exportSpeed = speed
         settings?.exportEnhanceAudio = isAudioEnhancementEnabled
         settings?.exportSubtitles = isSubtitleExportEnabled
+        settings?.exportEDL = isCutListExportEnabled
+        settings?.exportFCPXML = isFCPXMLExportEnabled
         onExport?(
             preset,
             quality,
             speed,
             isAudioEnhancementEnabled,
-            isSubtitleExportEnabled
+            sidecarOptions
         )
     }
 
@@ -501,7 +576,9 @@ final class ExportSheetView: NSView {
         ]
         speedPopup.selectItem(withTitle: speedTitles[settings.exportSpeed] ?? "1x")
         enhanceAudioSwitch.state = settings.exportEnhanceAudio ? .on : .off
-        subtitleSwitch.state = settings.exportSubtitles && canExportSubtitles ? .on : .off
+        subtitleCheckbox.state = settings.exportSubtitles && canExportSubtitles ? .on : .off
+        edlCheckbox.state = settings.exportEDL && canExportCutList ? .on : .off
+        fcpxmlCheckbox.state = settings.exportFCPXML && canExportFCPXML ? .on : .off
     }
 
     private func updateExportSummary() {

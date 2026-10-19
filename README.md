@@ -26,7 +26,7 @@ Redact is a Mac editor for podcasts, interviews, tutorials and other spoken medi
 
 ## How it works
 
-Import a video or audio file and Redact transcribes it on your Mac with [WhisperKit](https://github.com/argmaxinc/WhisperKit). Delete words, run Clean Up, or describe an edit to an agent; every change previews before you apply it and can be undone. Export as MP4, MKV, WebM, M4A, MP3 or WAV, or as subtitles with adjusted timing. Features, formats and preferences are in [docs/how-it-works.md](docs/how-it-works.md).
+Import a video or audio file and Redact transcribes it on your Mac with [WhisperKit](https://github.com/argmaxinc/WhisperKit). Delete words, run Clean Up, or describe an edit to an agent; every change previews before you apply it and can be undone. Export as MP4, MKV, WebM, M4A, MP3 or WAV, as subtitles with adjusted timing, or as an EDL or Final Cut Pro XML cut list for Premiere Pro, Final Cut Pro and DaVinci Resolve. Features, formats and preferences are in [docs/how-it-works.md](docs/how-it-works.md).
 
 ## Privacy
 

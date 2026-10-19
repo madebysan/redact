@@ -7,6 +7,7 @@ final class MainWindowController: NSWindowController {
     let project: ProjectDocument
     private weak var redactDocument: RedactDocument?
     private let mediaProcessor = FFmpegService()
+    private let ffmpegInstallCoordinator = FFmpegInstallCoordinator()
     private let transcriptionEngine = TranscriptionEngine()
     private let transcriptCache = TranscriptCache()
     let playbackController = PlaybackController()
@@ -156,10 +157,22 @@ final class MainWindowController: NSWindowController {
     }
 
     @objc func exportMedia(_ sender: Any?) {
-        guard project.appState == .editing, project.filePath != nil else { return }
+        guard project.appState == .editing, let filePath = project.filePath else { return }
         guard let mainWindow = window else { return }
+        guard ffmpegInstallCoordinator.ensureAvailable(in: mainWindow, then: { [weak self] in
+            self?.exportMedia(sender)
+        }) else { return }
         guard let mediaInfo = project.mediaInfo else {
-            showError("Redact has not finished reading this file's media streams.")
+            // Projects opened before FFmpeg was installed have no stream info yet.
+            ffmpegInstallCoordinator.probeMediaInfo(at: filePath) { [weak self] info in
+                guard let self else { return }
+                if let info {
+                    self.project.mediaInfo = info
+                    self.exportMedia(sender)
+                } else {
+                    self.showError("Redact has not finished reading this file's media streams.")
+                }
+            }
             return
         }
         let presets = ExportCatalog.presets(for: mediaInfo)
@@ -178,6 +191,8 @@ final class MainWindowController: NSWindowController {
             sourceInfo: mediaInfo,
             finalDuration: exportRenderPlan.editedDuration,
             canExportSubtitles: project.sourceTranscript != nil,
+            canExportCutList: true,
+            canExportFCPXML: mediaInfo.hasVideo,
             settings: .shared
         )
 
@@ -195,7 +210,7 @@ final class MainWindowController: NSWindowController {
             self.exportSheetWindow = nil
         }
 
-        sheetView.onExport = { [weak self] preset, quality, speed, enhanceAudio, exportSubtitles in
+        sheetView.onExport = { [weak self] preset, quality, speed, enhanceAudio, sidecars in
             guard let self, let inputPath = self.project.filePath else { return }
 
             let baseName = URL(fileURLWithPath: inputPath).deletingPathExtension().lastPathComponent
@@ -226,22 +241,27 @@ final class MainWindowController: NSWindowController {
                         quality: quality,
                         speed: speed,
                         enhanceAudio: enhanceAudio,
-                        exportSubtitles: exportSubtitles,
+                        sidecars: sidecars,
                         sheetView: sheetView
                     )
                 }
-                let subtitleURL = url.deletingPathExtension().appendingPathExtension("srt")
-                guard exportSubtitles,
-                      FileManager.default.fileExists(atPath: subtitleURL.path) else {
+                let existingSidecars = Self.sidecarURLs(for: url, options: sidecars)
+                    .filter { FileManager.default.fileExists(atPath: $0.path) }
+                guard !existingSidecars.isEmpty else {
                     startExport()
                     return
                 }
 
+                let names = existingSidecars.map(\.lastPathComponent).joined(separator: ", ")
                 let alert = NSAlert()
-                alert.messageText = "Replace Existing Subtitle File?"
-                alert.informativeText = "A subtitle file named \(subtitleURL.lastPathComponent) already exists beside the export."
+                alert.messageText = existingSidecars.count == 1
+                    ? "Replace Existing Sidecar File?"
+                    : "Replace Existing Sidecar Files?"
+                alert.informativeText = existingSidecars.count == 1
+                    ? "A file named \(names) already exists beside the export."
+                    : "Files named \(names) already exist beside the export."
                 alert.alertStyle = .warning
-                alert.addButton(withTitle: "Replace Subtitles")
+                alert.addButton(withTitle: existingSidecars.count == 1 ? "Replace File" : "Replace Files")
                 alert.addButton(withTitle: "Cancel")
                 alert.beginSheetModal(for: mainWindow) { response in
                     if response == .alertFirstButtonReturn {
@@ -628,7 +648,7 @@ final class MainWindowController: NSWindowController {
         quality: String?,
         speed: Double,
         enhanceAudio: Bool,
-        exportSubtitles: Bool,
+        sidecars: ExportSidecarOptions,
         sheetView: ExportSheetView
     ) {
         guard let revision = currentRevision else {
@@ -656,16 +676,46 @@ final class MainWindowController: NSWindowController {
             enhanceAudio: enhanceAudio,
             totalDuration: renderPlan.editedDuration
         )
-        let subtitleSidecar: SubtitleSidecar?
-        if exportSubtitles, let transcript = project.sourceTranscript {
-            subtitleSidecar = SubtitleSidecarBuilder.make(
+        var sidecarFiles: [ExportSidecarFile] = []
+        if sidecars.subtitles, let transcript = project.sourceTranscript {
+            let subtitleSidecar = SubtitleSidecarBuilder.make(
                 outputURL: outputURL,
                 transcript: transcript,
                 edits: project.editDecisionList,
                 renderPlan: renderPlan
             )
-        } else {
-            subtitleSidecar = nil
+            sidecarFiles.append(ExportSidecarFile(
+                url: subtitleSidecar.url,
+                contents: subtitleSidecar.contents,
+                label: "subtitles"
+            ))
+        }
+        let sourceURL = URL(fileURLWithPath: inputPath)
+        if sidecars.edl {
+            let edlSidecar = EDLSidecarBuilder.make(
+                outputURL: outputURL,
+                sourceURL: sourceURL,
+                renderPlan: renderPlan,
+                mediaInfo: sourceInfo
+            )
+            sidecarFiles.append(ExportSidecarFile(
+                url: edlSidecar.url,
+                contents: edlSidecar.contents,
+                label: "EDL cut list"
+            ))
+        }
+        if sidecars.fcpxml,
+           let fcpxmlSidecar = FCPXMLSidecarBuilder.make(
+               outputURL: outputURL,
+               sourceURL: sourceURL,
+               renderPlan: renderPlan,
+               mediaInfo: sourceInfo
+           ) {
+            sidecarFiles.append(ExportSidecarFile(
+                url: fcpxmlSidecar.url,
+                contents: fcpxmlSidecar.contents,
+                label: "Final Cut Pro XML"
+            ))
         }
 
         project.appState = .exporting
@@ -681,7 +731,7 @@ final class MainWindowController: NSWindowController {
                     request: request,
                     revision: revision,
                     workflow: workflow,
-                    subtitleSidecar: subtitleSidecar,
+                    sidecarFiles: sidecarFiles,
                     sheetView: sheetView
                 )
             }
@@ -692,7 +742,7 @@ final class MainWindowController: NSWindowController {
         request: ExportRequest,
         revision: SessionRevision,
         workflow: any ExportWorkflowProtocol,
-        subtitleSidecar: SubtitleSidecar?,
+        sidecarFiles: [ExportSidecarFile],
         sheetView: ExportSheetView
     ) async {
         let operation = ProcessOperation()
@@ -723,21 +773,21 @@ final class MainWindowController: NSWindowController {
                 return
             }
             var revealedURLs = [request.outputURL]
-            if let subtitleSidecar {
+            for sidecar in sidecarFiles {
                 do {
-                    try subtitleSidecar.contents.write(
-                        to: subtitleSidecar.url,
+                    try sidecar.contents.write(
+                        to: sidecar.url,
                         atomically: true,
                         encoding: .utf8
                     )
-                    revealedURLs.append(subtitleSidecar.url)
+                    revealedURLs.append(sidecar.url)
                 } catch {
                     project.appState = .editing
                     project.exportProgress = nil
                     sheetView.showError(
-                        "Media exported, but subtitles could not be written. \(error.localizedDescription)"
+                        "Media exported, but the \(sidecar.label) could not be written. \(error.localizedDescription)"
                     )
-                    NSWorkspace.shared.activateFileViewerSelecting([request.outputURL])
+                    NSWorkspace.shared.activateFileViewerSelecting(revealedURLs)
                     await projectSession.complete(.export, revision: revision)
                     return
                 }
@@ -762,6 +812,16 @@ final class MainWindowController: NSWindowController {
         }
 
         await projectSession.complete(.export, revision: revision)
+    }
+
+    /// Companion files the selected sidecar options would write beside `outputURL`.
+    static func sidecarURLs(for outputURL: URL, options: ExportSidecarOptions) -> [URL] {
+        let base = outputURL.deletingPathExtension()
+        var urls: [URL] = []
+        if options.subtitles { urls.append(base.appendingPathExtension("srt")) }
+        if options.edl { urls.append(base.appendingPathExtension("edl")) }
+        if options.fcpxml { urls.append(base.appendingPathExtension("fcpxml")) }
+        return urls
     }
 
     @objc func exportSRT(_ sender: Any?) {
@@ -1030,6 +1090,10 @@ final class MainWindowController: NSWindowController {
             }
             return
         }
+
+        guard ffmpegInstallCoordinator.ensureAvailable(in: window, then: { [weak self] in
+            self?.handleImportedFile(url)
+        }) else { return }
 
         currentRevision = nil
         playbackController.close()

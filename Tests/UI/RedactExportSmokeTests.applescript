@@ -35,7 +35,25 @@ on run arguments
             my chooseSaveDestination(appProcess, projectWindow, outputDirectory, "smoke-subtitles.srt")
             my waitForNoSheet(appProcess, projectWindow)
 
-            -- Default MP4 video export through the product export sheet.
+            -- Delete every word so the sheet export carries real cuts into the
+            -- media and the EDL and FCPXML sidecars.
+            set frontmost to true
+            set value of attribute "AXFocused" of text area 1 of scroll area 1 of projectWindow to true
+            keystroke "a" using command down
+            repeat 50 times
+                click menu bar item "Edit" of menu bar 1
+                if enabled of menu item "Delete Selected" of menu 1 of menu bar item "Edit" of menu bar 1 then exit repeat
+                key code 53
+                set value of attribute "AXFocused" of text area 1 of scroll area 1 of projectWindow to true
+                keystroke "a" using command down
+                delay 0.1
+            end repeat
+            if enabled of menu item "Delete Selected" of menu 1 of menu bar item "Edit" of menu bar 1 is false then error "Transcript selection did not reach the edit model before export"
+            perform action "AXPress" of menu item "Delete Selected" of menu 1 of menu bar item "Edit" of menu bar 1
+            delay 0.5
+
+            -- Default MP4 video export through the product export sheet, with the
+            -- remembered EDL and FCPXML sidecars.
             set frontmost to true
             click exportButton
             my waitForSheet(appProcess, projectWindow)
@@ -69,7 +87,7 @@ on run arguments
         end tell
     end tell
 
-    return "PASS: SRT, video, and audio exports"
+    return "PASS: SRT, video with EDL and FCPXML sidecars, and audio exports"
 end run
 
 on chooseSaveDestination(appProcess, projectWindow, outputDirectory, fileName)

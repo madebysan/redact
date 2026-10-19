@@ -148,9 +148,9 @@ import Testing
     #expect(sheet.isAudioEnhancementEnabled)
     #expect(sheet.isSubtitleExportEnabled)
 
-    var submitted: (String, String?, Double, Bool, Bool)?
-    sheet.onExport = { preset, quality, speed, enhanceAudio, subtitles in
-        submitted = (preset.id, quality, speed, enhanceAudio, subtitles)
+    var submitted: (String, String?, Double, Bool, ExportSidecarOptions)?
+    sheet.onExport = { preset, quality, speed, enhanceAudio, sidecars in
+        submitted = (preset.id, quality, speed, enhanceAudio, sidecars)
     }
     let exportButton = try #require(
         sheet.subviews.compactMap { $0 as? NSButton }
@@ -162,7 +162,7 @@ import Testing
     #expect(submitted?.1 == "720p")
     #expect(submitted?.2 == 1.5)
     #expect(submitted?.3 == true)
-    #expect(submitted?.4 == true)
+    #expect(submitted?.4 == ExportSidecarOptions(subtitles: true, edl: false, fcpxml: false))
     #expect(settings.exportPresetID == ExportPreset.mp4Video.id)
     #expect(settings.exportQuality == "720p")
     #expect(settings.exportSpeed == 1.5)
@@ -210,6 +210,8 @@ import Testing
     #expect(optionLabels.contains("Export speed"))
     #expect(optionLabels.contains("Enhance audio"))
     #expect(optionLabels.contains("Also export subtitles"))
+    #expect(optionLabels.contains("Also export EDL cut list"))
+    #expect(optionLabels.contains("Also export Final Cut Pro XML"))
     #expect(optionLabels.contains("Export summary"))
 
     sheet.showProgressMode(status: "Preparing export...")
@@ -300,4 +302,53 @@ import Testing
     try progressData.write(
         to: outputURL.appendingPathComponent("export-progress-\(appearanceValue).png")
     )
+}
+
+@Test @MainActor func exportSheetRemembersHandoffSidecarsAndWithholdsFCPXMLForAudioOnlySources() throws {
+    let suiteName = "redact-export-handoff-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suiteName))
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+    let settings = Settings(defaults: defaults)
+    settings.exportEDL = true
+    settings.exportFCPXML = true
+
+    let videoSheet = ExportSheetView(
+        frame: NSRect(x: 0, y: 0, width: 520, height: 400),
+        presets: [.mp4Video],
+        canExportSubtitles: true,
+        canExportCutList: true,
+        canExportFCPXML: true,
+        settings: settings
+    )
+    #expect(videoSheet.isCutListExportEnabled)
+    #expect(videoSheet.isFCPXMLExportEnabled)
+    #expect(videoSheet.sidecarOptions == ExportSidecarOptions(subtitles: false, edl: true, fcpxml: true))
+
+    let audioSheet = ExportSheetView(
+        frame: NSRect(x: 0, y: 0, width: 520, height: 400),
+        presets: [.m4aAudio],
+        canExportSubtitles: true,
+        canExportCutList: true,
+        canExportFCPXML: false,
+        settings: settings
+    )
+    #expect(audioSheet.isCutListExportEnabled)
+    #expect(!audioSheet.isFCPXMLExportEnabled)
+    let fcpxmlCheckbox = try #require(
+        audioSheet.subviews.compactMap { $0 as? NSButton }
+            .first { $0.accessibilityLabel() == "Also export Final Cut Pro XML" }
+    )
+    #expect(!fcpxmlCheckbox.isEnabled)
+
+    var submitted: ExportSidecarOptions?
+    audioSheet.onExport = { _, _, _, _, sidecars in submitted = sidecars }
+    settings.exportEDL = false
+    let exportButton = try #require(
+        audioSheet.subviews.compactMap { $0 as? NSButton }
+            .first { $0.title == "Export Audio" }
+    )
+    exportButton.performClick(nil)
+    #expect(submitted == ExportSidecarOptions(subtitles: false, edl: true, fcpxml: false))
+    #expect(settings.exportEDL)
+    #expect(!settings.exportFCPXML)
 }

@@ -17,7 +17,7 @@ Current coverage:
 - automatic transcript focus plus keyboard selection, menu deletion, and keyboard undo;
 - keyboard preview play and pause;
 - edit persistence, close, reopen, and restore;
-- focused export configuration, completion action, and SRT, MP4 video, and MP3 audio output validation;
+- focused export configuration, completion action, and SRT, MP4 video, and MP3 audio output validation, with EDL and FCPXML cut-list sidecars written beside the video export and checked against its duration;
 - focused cleanup categories plus reviewed filler, repetition, and long-pause cleanup with saved edit validation;
 - missing-media detection and relinking.
 
