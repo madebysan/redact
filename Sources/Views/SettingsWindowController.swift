@@ -1,10 +1,40 @@
 import AppKit
 import WhisperKit
 
-/// Settings window with card-based layout grouped into rounded-rect sections.
-final class SettingsWindowController: NSWindowController {
+/// The settings concerns, shown as icon tabs in a compact preferences window.
+enum SettingsPane: String, CaseIterable {
+    case transcript
+    case transcription
+    case mediaTools
+
+    var title: String {
+        switch self {
+        case .transcript: "Transcript"
+        case .transcription: "Transcription"
+        case .mediaTools: "Media Tools"
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .transcript: "textformat"
+        case .transcription: "waveform"
+        case .mediaTools: "wrench.and.screwdriver"
+        }
+    }
+
+    var toolbarIdentifier: NSToolbarItem.Identifier {
+        NSToolbarItem.Identifier("settings.\(rawValue)")
+    }
+}
+
+/// Native icon-tab preferences window: one pane per concern, sized to its content.
+final class SettingsWindowController: NSWindowController, NSToolbarDelegate {
     private static var shared: SettingsWindowController?
+    static let contentWidth: CGFloat = 500
+
     private var keyEventMonitor: Any?
+    private(set) var selectedPane: SettingsPane = .transcript
 
     static func show() {
         if let existing = shared {
@@ -18,17 +48,22 @@ final class SettingsWindowController: NSWindowController {
 
     convenience init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 500, height: 700),
+            contentRect: NSRect(x: 0, y: 0, width: Self.contentWidth, height: 400),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
         )
-        window.title = "Settings"
         window.isReleasedWhenClosed = false
         window.backgroundColor = Theme.surface0
-        window.center()
+        window.toolbarStyle = .preference
 
         self.init(window: window)
+
+        let toolbar = NSToolbar(identifier: "RedactSettingsToolbar")
+        toolbar.delegate = self
+        toolbar.displayMode = .iconAndLabel
+        toolbar.allowsUserCustomization = false
+        window.toolbar = toolbar
 
         // Escape key closes the window
         keyEventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak window] event in
@@ -39,24 +74,8 @@ final class SettingsWindowController: NSWindowController {
             return event
         }
 
-        let scrollView = NSScrollView()
-        scrollView.hasVerticalScroller = true
-        scrollView.drawsBackground = false
-        scrollView.autoresizingMask = [.width, .height]
-        scrollView.frame = window.contentView!.bounds
-
-        let contentView = SettingsContentView()
-        contentView.translatesAutoresizingMaskIntoConstraints = false
-        scrollView.documentView = contentView
-
-        // Pin document view to clip view for vertical-only scrolling
-        NSLayoutConstraint.activate([
-            contentView.topAnchor.constraint(equalTo: scrollView.contentView.topAnchor),
-            contentView.leadingAnchor.constraint(equalTo: scrollView.contentView.leadingAnchor),
-            contentView.trailingAnchor.constraint(equalTo: scrollView.contentView.trailingAnchor),
-        ])
-
-        window.contentView = scrollView
+        select(.transcript)
+        window.center()
     }
 
     deinit {
@@ -68,6 +87,74 @@ final class SettingsWindowController: NSWindowController {
     override func close() {
         super.close()
         SettingsWindowController.shared = nil
+    }
+
+    /// Show one pane and resize the window to fit it, keeping the top edge in place.
+    func select(_ pane: SettingsPane) {
+        guard let window else { return }
+        selectedPane = pane
+        window.toolbar?.selectedItemIdentifier = pane.toolbarIdentifier
+        window.title = pane.title
+
+        let content = SettingsContentView(pane: pane)
+        content.translatesAutoresizingMaskIntoConstraints = false
+        let container = NSView()
+        container.addSubview(content)
+        NSLayoutConstraint.activate([
+            content.topAnchor.constraint(equalTo: container.topAnchor),
+            content.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            content.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            content.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            content.widthAnchor.constraint(equalToConstant: Self.contentWidth),
+        ])
+        let height = ceil(content.fittingSize.height)
+
+        let oldFrame = window.frame
+        window.contentView = container
+        let contentRect = NSRect(x: 0, y: 0, width: Self.contentWidth, height: height)
+        var frame = window.frameRect(forContentRect: contentRect)
+        frame.origin.x = oldFrame.minX
+        frame.origin.y = oldFrame.maxY - frame.height
+        window.setFrame(frame, display: true, animate: window.isVisible)
+    }
+
+    @objc private func paneClicked(_ sender: NSToolbarItem) {
+        guard let pane = SettingsPane.allCases.first(where: { $0.toolbarIdentifier == sender.itemIdentifier }) else {
+            return
+        }
+        select(pane)
+    }
+
+    // MARK: - NSToolbarDelegate
+
+    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        SettingsPane.allCases.map(\.toolbarIdentifier)
+    }
+
+    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        SettingsPane.allCases.map(\.toolbarIdentifier)
+    }
+
+    func toolbarSelectableItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        SettingsPane.allCases.map(\.toolbarIdentifier)
+    }
+
+    func toolbar(
+        _ toolbar: NSToolbar,
+        itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier,
+        willBeInsertedIntoToolbar flag: Bool
+    ) -> NSToolbarItem? {
+        guard let pane = SettingsPane.allCases.first(where: { $0.toolbarIdentifier == itemIdentifier }) else {
+            return nil
+        }
+        let item = NSToolbarItem(itemIdentifier: itemIdentifier)
+        item.label = pane.title
+        item.paletteLabel = pane.title
+        item.toolTip = pane.title
+        item.image = NSImage(systemSymbolName: pane.symbolName, accessibilityDescription: pane.title)
+        item.target = self
+        item.action = #selector(paneClicked(_:))
+        return item
     }
 }
 
@@ -110,19 +197,22 @@ private class SettingsContentView: NSView {
     private var cardViews: [NSView] = []
     private var separatorViews: [NSView] = []
     private var rowLabels: [NSTextField] = []
-    private var sectionTitleLabels: [NSTextField] = []
     private var descriptionLabels: [NSTextField] = []
 
     override var isFlipped: Bool { true }
 
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
+    private let pane: SettingsPane
+
+    init(pane: SettingsPane) {
+        self.pane = pane
+        super.init(frame: .zero)
         setup()
         loadFromSettings()
         checkModelAvailability()
     }
 
     required init?(coder: NSCoder) {
+        pane = .transcript
         super.init(coder: coder)
         setup()
         loadFromSettings()
@@ -137,30 +227,32 @@ private class SettingsContentView: NSView {
     // MARK: - Setup
 
     private func setup() {
-        let sections = [
-            buildSection("Transcript", card: buildTranscriptCard()),
-            buildSection("Transcription", card: buildTranscriptionCard()),
-            buildSection("Media Tools", card: buildFFmpegCard()),
-        ]
-
-        var prev: NSView?
-        for section in sections {
-            section.translatesAutoresizingMaskIntoConstraints = false
-            addSubview(section)
-
-            NSLayoutConstraint.activate([
-                section.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
-                section.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
-            ])
-
-            if let p = prev {
-                section.topAnchor.constraint(equalTo: p.bottomAnchor, constant: 24).isActive = true
-            } else {
-                section.topAnchor.constraint(equalTo: topAnchor, constant: 24).isActive = true
-            }
-            prev = section
+        let card: NSView
+        switch pane {
+        case .transcript: card = buildTranscriptCard()
+        case .transcription: card = buildTranscriptionCard()
+        case .mediaTools: card = buildFFmpegCard()
         }
-        prev?.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -24).isActive = true
+        card.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(card)
+        NSLayoutConstraint.activate([
+            card.topAnchor.constraint(equalTo: topAnchor, constant: 20),
+            card.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 20),
+            card.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -20),
+        ])
+
+        if pane == .transcript {
+            // Reset sits outside the form, in the pane footer.
+            restoreTranscriptDefaultsButton.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(restoreTranscriptDefaultsButton)
+            NSLayoutConstraint.activate([
+                restoreTranscriptDefaultsButton.topAnchor.constraint(equalTo: card.bottomAnchor, constant: 16),
+                restoreTranscriptDefaultsButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -20),
+                restoreTranscriptDefaultsButton.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -20),
+            ])
+        } else {
+            card.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -20).isActive = true
+        }
 
         NotificationCenter.default.addObserver(
             self, selector: #selector(settingsDidChange),
@@ -169,33 +261,6 @@ private class SettingsContentView: NSView {
     }
 
     // MARK: - Section & Card Builders
-
-    private func buildSection(_ title: String, card: NSView) -> NSView {
-        let container = NSView()
-        container.translatesAutoresizingMaskIntoConstraints = false
-
-        let titleLabel = NSTextField(labelWithString: title)
-        titleLabel.font = .systemFont(ofSize: 12, weight: .regular)
-        titleLabel.textColor = Theme.textSecondary
-        titleLabel.translatesAutoresizingMaskIntoConstraints = false
-        sectionTitleLabels.append(titleLabel)
-        container.addSubview(titleLabel)
-
-        card.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(card)
-
-        NSLayoutConstraint.activate([
-            titleLabel.topAnchor.constraint(equalTo: container.topAnchor),
-            titleLabel.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-
-            card.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 8),
-            card.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            card.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            card.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-        ])
-
-        return container
-    }
 
     private func buildCard(_ rows: [NSView]) -> NSView {
         let card = NSView()
@@ -348,8 +413,6 @@ private class SettingsContentView: NSView {
             preview,
             buildSeparator(),
             buildRow(label: "Highlight", control: colorStack),
-            buildSeparator(),
-            buildRow(label: "Defaults", control: restoreTranscriptDefaultsButton),
         ])
     }
 
@@ -644,8 +707,8 @@ private class SettingsContentView: NSView {
         }
 
         if isModelDownloaded {
-            modelStatusLabel.stringValue = "Ready to use"
-            modelStatusLabel.textColor = .systemGreen
+            modelStatusLabel.stringValue = "Downloaded and ready"
+            modelStatusLabel.textColor = Theme.textSecondary
             modelActionButton.title = "Ready"
             modelActionButton.isEnabled = false
         } else {
@@ -663,7 +726,7 @@ private class SettingsContentView: NSView {
         ffmpegStatusLabel.stringValue = status.summary
         ffmpegStatusLabel.toolTip = status.ffmpeg?.path
         if status.isAvailable {
-            ffmpegStatusLabel.textColor = status.usesManagedCopy ? .systemGreen : .secondaryLabelColor
+            ffmpegStatusLabel.textColor = Theme.textSecondary
             ffmpegActionButton.title = status.usesManagedCopy ? "Reinstall" : "Install Redact's Copy"
         } else {
             ffmpegStatusLabel.textColor = .secondaryLabelColor

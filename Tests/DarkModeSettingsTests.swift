@@ -37,8 +37,11 @@ import Testing
             (0..<control.segmentCount).compactMap { control.label(forSegment: $0) }
         }
 
-    #expect(window.title == "Settings")
-    #expect(contentView.frame.height == 700)
+    #expect(window.title == "Transcript")
+    #expect(window.toolbarStyle == .preference)
+    #expect(window.toolbar?.items.map(\.label) == ["Transcript", "Transcription", "Media Tools"])
+    #expect(contentView.frame.width == SettingsWindowController.contentWidth)
+    #expect(contentView.frame.height < 560)
     #expect(!labels.contains("Appearance"))
     #expect(!labels.contains("Theme"))
     #expect(!segmentedLabels.contains("Light"))
@@ -47,8 +50,10 @@ import Testing
 
 @Test @MainActor func settingsWindowMakesDefaultsAndModelTradeoffsDiscoverable() throws {
     let controller = SettingsWindowController()
+    let transcriptPane = try #require(controller.window?.contentView)
+    let buttons = descendantViews(of: transcriptPane, as: NSButton.self)
+    controller.select(.transcription)
     let contentView = try #require(controller.window?.contentView)
-    let buttons = descendantViews(of: contentView, as: NSButton.self)
     let popups = descendantViews(of: contentView, as: NSPopUpButton.self)
     let labels = descendantViews(of: contentView, as: NSTextField.self).map(\.stringValue)
     let modelPopup = try #require(
@@ -72,18 +77,20 @@ import Testing
     try FileManager.default.createDirectory(at: outputURL, withIntermediateDirectories: true)
     let controller = SettingsWindowController()
     let window = try #require(controller.window)
-    let contentView = try #require(window.contentView)
-    window.orderFrontRegardless()
     defer { window.close() }
-    contentView.layoutSubtreeIfNeeded()
-    guard let representation = contentView.bitmapImageRepForCachingDisplay(
-        in: contentView.bounds
-    ) else {
-        throw CocoaError(.fileWriteUnknown)
+    for pane in SettingsPane.allCases {
+        controller.select(pane)
+        let contentView = try #require(window.contentView)
+        contentView.layoutSubtreeIfNeeded()
+        guard let representation = contentView.bitmapImageRepForCachingDisplay(
+            in: contentView.bounds
+        ) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        contentView.cacheDisplay(in: contentView.bounds, to: representation)
+        let data = try #require(representation.representation(using: .png, properties: [:]))
+        try data.write(to: outputURL.appendingPathComponent("settings-\(pane.rawValue).png"))
     }
-    contentView.cacheDisplay(in: contentView.bounds, to: representation)
-    let data = try #require(representation.representation(using: .png, properties: [:]))
-    try data.write(to: outputURL.appendingPathComponent("settings-window-dark.png"))
 }
 
 private func descendantViews<T: NSView>(of root: NSView, as type: T.Type) -> [T] {
