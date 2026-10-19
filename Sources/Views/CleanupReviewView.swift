@@ -137,11 +137,11 @@ final class CleanupReviewView: NSView, NSTableViewDataSource, NSTableViewDelegat
         layer?.cornerRadius = 12
 
         let titleLabel = NSTextField(labelWithString: configuration.title)
-        titleLabel.font = .systemFont(ofSize: 18, weight: .semibold)
+        titleLabel.font = .systemFont(ofSize: 15, weight: .semibold)
         titleLabel.textColor = Theme.textPrimary
 
         let subtitleLabel = NSTextField(wrappingLabelWithString: configuration.subtitle)
-        subtitleLabel.font = .systemFont(ofSize: 12)
+        subtitleLabel.font = .systemFont(ofSize: 13)
         subtitleLabel.textColor = Theme.textSecondary
         subtitleLabel.maximumNumberOfLines = 2
 
@@ -159,7 +159,7 @@ final class CleanupReviewView: NSView, NSTableViewDataSource, NSTableViewDelegat
         }
         if let goal = configuration.goal {
             let goalLabel = NSTextField(wrappingLabelWithString: goal)
-            goalLabel.font = .systemFont(ofSize: 12)
+            goalLabel.font = .systemFont(ofSize: 13)
             goalLabel.textColor = Theme.textPrimary
             goalLabel.maximumNumberOfLines = 2
             headerStack.addArrangedSubview(goalLabel)
@@ -197,7 +197,11 @@ final class CleanupReviewView: NSView, NSTableViewDataSource, NSTableViewDelegat
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = false
         scrollView.autohidesScrollers = true
-        scrollView.borderType = .bezelBorder
+        scrollView.borderType = .noBorder
+        scrollView.wantsLayer = true
+        scrollView.layer?.cornerRadius = 8
+        scrollView.layer?.cornerCurve = .continuous
+        scrollView.layer?.backgroundColor = Theme.surface1.cgColor
         scrollView.drawsBackground = false
 
         summaryLabel.font = .systemFont(ofSize: 12)
@@ -293,6 +297,7 @@ final class CleanupReviewView: NSView, NSTableViewDataSource, NSTableViewDelegat
         tableView.selectionHighlightStyle = .none
         tableView.backgroundColor = .clear
         tableView.usesAlternatingRowBackgroundColors = true
+        tableView.style = .inset
         tableView.setAccessibilityLabel(
             configuration.showsRequirement ? "Agent edit suggestions" : "Cleanup suggestions"
         )

@@ -54,6 +54,8 @@ Redact offers a curated dropdown of built-in macOS font families using their rea
 | Empty-state title | System 18 pt, medium |
 | Progress state | System 16 pt, medium |
 | Standard label | System 13 pt, regular or medium by hierarchy |
+| Sheet title | System 15 pt, semibold (export, cleanup, agent, FFmpeg sheets) |
+| Sheet body | System 13 pt; help and privacy notes 11 pt tertiary |
 | Supporting text | System 11-12 pt |
 | Transport time | Monospaced digits 11 pt |
 

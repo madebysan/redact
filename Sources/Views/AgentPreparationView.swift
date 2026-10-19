@@ -34,13 +34,13 @@ final class AgentPreparationView: NSView {
         layer?.cornerRadius = 12
 
         let titleLabel = NSTextField(labelWithString: "Edit with Agent")
-        titleLabel.font = .systemFont(ofSize: 18, weight: .semibold)
+        titleLabel.font = .systemFont(ofSize: 15, weight: .semibold)
         titleLabel.textColor = Theme.textPrimary
 
         let disclosureLabel = NSTextField(
             wrappingLabelWithString: "Redact will create a privacy-safe transcript snapshot and copy a connection prompt. Paste it into Codex or Claude Code. After the agent confirms it is connected, describe the edit you want there."
         )
-        disclosureLabel.font = .systemFont(ofSize: 12)
+        disclosureLabel.font = .systemFont(ofSize: 13)
         disclosureLabel.textColor = Theme.textSecondary
         disclosureLabel.maximumNumberOfLines = 3
 
@@ -52,7 +52,7 @@ final class AgentPreparationView: NSView {
         privacyLabel.maximumNumberOfLines = 2
 
         let agentLabel = NSTextField(labelWithString: "Agent")
-        agentLabel.font = .systemFont(ofSize: 12, weight: .medium)
+        agentLabel.font = .systemFont(ofSize: 13)
         agentLabel.textColor = Theme.textPrimary
 
         agentPopup.addItems(withTitles: AgentProvider.allCases.map(\.displayName))
