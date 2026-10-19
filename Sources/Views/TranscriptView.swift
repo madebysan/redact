@@ -67,6 +67,24 @@ class TranscriptView: NSView, NSTextViewDelegate, NSGestureRecognizerDelegate {
         selectionIndex.wordIDs(intersecting: textView.selectedRanges.map(\.rangeValue))
     }
 
+    /// Width the transcript text is laid out in; zero means nothing is visible.
+    var displayedTextWidth: CGFloat {
+        textView.frame.width
+    }
+
+    /// Whether the text view widens with its scroll view instead of staying at its initial width.
+    var displayedTextTracksScrollWidth: Bool {
+        textView.autoresizingMask.contains(.width)
+    }
+
+    override func layout() {
+        super.layout()
+        let width = scrollView.contentSize.width
+        if width > 0, textView.frame.width != width {
+            textView.setFrameSize(NSSize(width: width, height: textView.frame.height))
+        }
+    }
+
     /// The background color drawn behind a word, if any.
     func displayedBackgroundColor(forWordID id: String) -> NSColor? {
         guard let storage = textView.textStorage,
@@ -141,6 +159,15 @@ class TranscriptView: NSView, NSTextViewDelegate, NSGestureRecognizerDelegate {
         )
 
         scrollView.documentView = textView
+        // A programmatic NSTextView starts with a zero-width frame. Without an
+        // explicit width policy the clip view never widens it, TextKit lays the
+        // words out into zero width, and the transcript draws nothing.
+        textView.autoresizingMask = [.width]
+        textView.minSize = NSSize(width: 0, height: 0)
+        textView.maxSize = NSSize(
+            width: CGFloat.greatestFiniteMagnitude,
+            height: CGFloat.greatestFiniteMagnitude
+        )
 
         NSLayoutConstraint.activate([
             scrollView.topAnchor.constraint(equalTo: topAnchor),

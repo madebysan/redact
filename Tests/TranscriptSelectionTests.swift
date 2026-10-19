@@ -156,3 +156,34 @@ import Testing
     #expect(view.displayedBackgroundColor(forWordID: "w_0") == nil)
     #expect(view.displayedBackgroundColor(forWordID: "w_1") == highlight)
 }
+
+@Test @MainActor func transcriptViewLaysTextOutAtTheScrollViewWidth() {
+    let project = ProjectDocument()
+    project.setTranscript(RawTranscript(
+        segments: [RawSegment(id: 0, words: [
+            RawWord(word: "one", start: 0, end: 0.2, confidence: 1),
+            RawWord(word: "two", start: 0.3, end: 0.5, confidence: 1),
+        ])],
+        language: "en",
+        duration: 0.5
+    ))
+    let view = TranscriptView()
+    view.project = project
+    let window = NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
+        styleMask: [.titled],
+        backing: .buffered,
+        defer: false
+    )
+    window.contentView = view
+    window.layoutIfNeeded()
+    view.setTranscript(segments: project.segments)
+    window.layoutIfNeeded()
+
+    // Regression: on macOS 27.2 a programmatic text view without a width policy
+    // kept a zero-width frame inside its scroll view, so the transcript laid out
+    // into nothing and drew nothing. The test host does not reproduce the zero
+    // width, so the policy itself is asserted alongside the laid-out width.
+    #expect(view.displayedTextTracksScrollWidth)
+    #expect(view.displayedTextWidth > 500)
+}
