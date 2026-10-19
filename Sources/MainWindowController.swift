@@ -673,7 +673,8 @@ final class MainWindowController: NSWindowController {
 
         let workflow = exportWorkflow
         let session = projectSession
-        Task {
+        Task { [weak self] in
+            guard let self else { return }
             await session.start(.export, revision: revision) { [weak self] in
                 guard let self else { return }
                 await self.runExport(
@@ -1050,7 +1051,8 @@ final class MainWindowController: NSWindowController {
 
         let workflow = importWorkflow
         let session = projectSession
-        Task {
+        Task { [weak self] in
+            guard let self else { return }
             await session.start(.importMedia, revision: revision) { [weak self] in
                 guard let self else { return }
                 await self.runMediaImport(

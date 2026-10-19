@@ -313,11 +313,6 @@ class MainSplitViewController: NSViewController {
         transcriptView.focusForKeyboardNavigation()
     }
 
-    // Keep old method name for backward compat during transition
-    func showTranscript(segments: [Segment]) {
-        showEditing(segments: segments)
-    }
-
     // MARK: - Editor Layout
 
     var isPreviewVisible: Bool {

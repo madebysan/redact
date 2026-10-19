@@ -67,6 +67,16 @@ class TranscriptView: NSView, NSTextViewDelegate, NSGestureRecognizerDelegate {
         selectionIndex.wordIDs(intersecting: textView.selectedRanges.map(\.rangeValue))
     }
 
+    /// The background color drawn behind a word, if any.
+    func displayedBackgroundColor(forWordID id: String) -> NSColor? {
+        guard let storage = textView.textStorage,
+              let range = selectionIndex.range(forWordID: id),
+              range.location < storage.length else {
+            return nil
+        }
+        return storage.attribute(.backgroundColor, at: range.location, effectiveRange: nil) as? NSColor
+    }
+
     override init(frame frameRect: NSRect) {
         self.textView = NSTextView(usingTextLayoutManager: true)
         super.init(frame: frameRect)
@@ -223,25 +233,31 @@ class TranscriptView: NSView, NSTextViewDelegate, NSGestureRecognizerDelegate {
     }
 
     /// Highlight the currently-playing word. O(1) — clears only the previous range.
+    /// Playback reports its position about 30 times a second, so a repeated call
+    /// for the word that is already highlighted returns without touching the text.
     func highlightWord(id: String?) {
-        guard let storage = textView.textStorage else { return }
+        guard id != currentlyHighlightedId, let storage = textView.textStorage else { return }
 
-        if let prevId = currentlyHighlightedId,
-           let word = project?.word(withID: prevId) {
+        let previousID = currentlyHighlightedId
+        currentlyHighlightedId = id
+
+        if let previousID, let word = project?.word(withID: previousID) {
             updateWordAppearance(
-                wordId: prevId,
+                wordId: previousID,
                 deleted: word.deleted,
-                selected: project?.selectedWordIds.contains(prevId) == true
+                selected: project?.selectedWordIds.contains(previousID) == true
             )
         }
 
-        currentlyHighlightedId = id
-
         if let id, let range = selectionIndex.range(forWordID: id) {
-            let color = Settings.shared.highlightColor.withAlphaComponent(0.2)
-            storage.addAttribute(.backgroundColor, value: color, range: range)
+            applyPlaybackHighlight(to: range, in: storage)
             textView.scrollRangeToVisible(range)
         }
+    }
+
+    private func applyPlaybackHighlight(to range: NSRange, in storage: NSTextStorage) {
+        let color = Settings.shared.highlightColor.withAlphaComponent(0.2)
+        storage.addAttribute(.backgroundColor, value: color, range: range)
     }
 
     /// Apply visual state for a single word.
@@ -296,6 +312,9 @@ class TranscriptView: NSView, NSTextViewDelegate, NSGestureRecognizerDelegate {
             storage.removeAttribute(.underlineStyle, range: range)
             storage.removeAttribute(.underlineColor, range: range)
             storage.removeAttribute(.toolTip, range: range)
+            if wordId == currentlyHighlightedId {
+                applyPlaybackHighlight(to: range, in: storage)
+            }
         }
     }
 

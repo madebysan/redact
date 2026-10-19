@@ -33,22 +33,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         // Set dock icon from .icns (with 5% padding to reduce visual size)
-        var rawIcon: NSImage?
-        if let icon = Bundle.main.image(forResource: "icon") {
-            rawIcon = icon
-        } else {
-            let candidates = [
-                NSHomeDirectory() + "/Projects/redact/Sources/Resources/icon.icns",
-                NSHomeDirectory() + "/Projects/redact/assets/icon.icns",
-            ]
-            for path in candidates {
-                if let icon = NSImage(contentsOfFile: path) {
-                    rawIcon = icon
-                    break
-                }
-            }
-        }
-        if let rawIcon {
+        if let rawIcon = Bundle.main.image(forResource: "icon") {
             let size = NSSize(width: 1024, height: 1024)
             let scale: CGFloat = 0.90
             let inset = size.width * (1 - scale) / 2

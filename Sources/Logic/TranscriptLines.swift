@@ -8,7 +8,6 @@ struct TranscriptLine: Identifiable, Equatable {
     let words: [Word]
 
     var startTime: Double { words.first?.start ?? 0 }
-    var endTime: Double { words.last?.end ?? 0 }
 }
 
 /// Group the transcript into display lines.

@@ -102,15 +102,6 @@ func findDeletedRange(time: Double, deletedRanges: [TimeRange]) -> TimeRange? {
     return nil
 }
 
-/// Find the next deleted range that starts AFTER the given time.
-/// Used to fade out audio as we approach a cut.
-func findNextDeletedStart(time: Double, deletedRanges: [TimeRange]) -> Double? {
-    for range in deletedRanges {
-        if range.start > time { return range.start }
-    }
-    return nil
-}
-
 /// Find the word at the given timestamp using binary search.
 func findWordAtTime(_ words: [Word], time: Double) -> Word? {
     guard !words.isEmpty else { return nil }

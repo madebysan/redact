@@ -337,11 +337,6 @@ class Settings {
         NSApp.appearance = NSAppearance(named: .darkAqua)
     }
 
-    /// Whether the current effective appearance is dark.
-    var isDark: Bool {
-        true
-    }
-
     // MARK: - Private
 
     private func notifyChanged() {

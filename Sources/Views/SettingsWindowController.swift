@@ -272,27 +272,6 @@ private class SettingsContentView: NSView {
         return wrapper
     }
 
-    private func buildDescription(_ text: String) -> NSView {
-        let container = NSView()
-        container.translatesAutoresizingMaskIntoConstraints = false
-
-        let label = NSTextField(wrappingLabelWithString: text)
-        label.font = .systemFont(ofSize: 11)
-        label.textColor = Theme.textTertiary
-        label.translatesAutoresizingMaskIntoConstraints = false
-        descriptionLabels.append(label)
-        container.addSubview(label)
-
-        NSLayoutConstraint.activate([
-            label.topAnchor.constraint(equalTo: container.topAnchor, constant: 4),
-            label.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
-            label.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -16),
-            label.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -12),
-        ])
-
-        return container
-    }
-
     // MARK: - Card Content Builders
 
     private func buildTranscriptCard() -> NSView {
@@ -671,7 +650,8 @@ private class SettingsContentView: NSView {
         modelStatusLabel.stringValue = "Downloading model… 0%"
         modelStatusLabel.textColor = .secondaryLabelColor
 
-        Task {
+        Task { [weak self] in
+            guard let self else { return }
             do {
                 let _ = try await WhisperKit.download(
                     variant: modelId,

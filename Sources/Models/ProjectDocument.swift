@@ -207,25 +207,10 @@ class ProjectDocument {
     }
 
     @discardableResult
-    func addToSelection(_ ids: [String]) -> Set<String> {
-        let previousSelection = selectedWordIds
-        selectedWordIds.formUnion(ids)
-        return previousSelection.symmetricDifference(selectedWordIds)
-    }
-
-    @discardableResult
     func clearSelection() -> Set<String> {
         let changedWordIDs = selectedWordIds
         selectedWordIds = []
         return changedWordIDs
-    }
-
-    @discardableResult
-    func selectAll() -> Set<String> {
-        let previousSelection = selectedWordIds
-        let allIds = allWords.filter { !$0.deleted }.map(\.id)
-        selectedWordIds = Set(allIds)
-        return previousSelection.symmetricDifference(selectedWordIds)
     }
 
     // MARK: - Delete / Restore
