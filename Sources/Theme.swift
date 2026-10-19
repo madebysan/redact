@@ -64,7 +64,7 @@ enum Theme {
 
     static let waveformBar = dyn(
         light: NSColor(white: 0.7, alpha: 1),
-        dark: NSColor(white: 0.23, alpha: 1)
+        dark: NSColor(white: 0.36, alpha: 1)
     )
 
     static let waveformCursor = accent

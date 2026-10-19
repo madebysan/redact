@@ -61,6 +61,7 @@ class MainSplitViewController: NSViewController {
         container.layer?.backgroundColor = Theme.surface0.cgColor
         container.onAppearanceChange = { [weak container, weak self] in
             container?.layer?.backgroundColor = Theme.surface0.cgColor
+            self?.rightPanel?.layer?.backgroundColor = Theme.surface1.cgColor
             self?.splitDivider?.layer?.backgroundColor = Theme.divider.cgColor
         }
         self.view = container
@@ -242,6 +243,7 @@ class MainSplitViewController: NSViewController {
         // Right panel: transcript
         rightPanel = NSView()
         rightPanel.wantsLayer = true
+        rightPanel.layer?.backgroundColor = Theme.surface1.cgColor
         rightPanel.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(rightPanel)
 

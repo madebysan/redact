@@ -9,8 +9,16 @@ class WaveformView: NSView {
     private let waveformImageView = NSImageView()
     private let cutMarkerOverlay = CutMarkerOverlayView()
     private let cursorView = NSView()
+    private let topDivider = NSView()
     private var totalDuration: Double = 0
     private var waveformTask: Task<Void, Never>?
+    private var cursorLeadingConstraint: NSLayoutConstraint?
+
+    /// Audio is analysed once at this resolution and resampled to the pixel
+    /// width of the strip whenever it is laid out.
+    private static let analysisSampleCount = 4000
+    private var sourceSamples: [Float] = []
+    private var renderedSize: CGSize = .zero
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -28,7 +36,7 @@ class WaveformView: NSView {
 
     private func setup() {
         wantsLayer = true
-        layer?.backgroundColor = Theme.surface1.cgColor
+        layer?.backgroundColor = Theme.surface2.cgColor
 
         // Waveform image
         waveformImageView.imageScaling = .scaleAxesIndependently
@@ -44,7 +52,17 @@ class WaveformView: NSView {
         cursorView.translatesAutoresizingMaskIntoConstraints = false
         addSubview(cursorView)
 
+        topDivider.wantsLayer = true
+        topDivider.layer?.backgroundColor = Theme.divider.cgColor
+        topDivider.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(topDivider)
+
         NSLayoutConstraint.activate([
+            topDivider.topAnchor.constraint(equalTo: topAnchor),
+            topDivider.leadingAnchor.constraint(equalTo: leadingAnchor),
+            topDivider.trailingAnchor.constraint(equalTo: trailingAnchor),
+            topDivider.heightAnchor.constraint(equalToConstant: 1),
+
             waveformImageView.topAnchor.constraint(equalTo: topAnchor),
             waveformImageView.leadingAnchor.constraint(equalTo: leadingAnchor),
             waveformImageView.trailingAnchor.constraint(equalTo: trailingAnchor),
@@ -58,8 +76,15 @@ class WaveformView: NSView {
             cursorView.topAnchor.constraint(equalTo: topAnchor),
             cursorView.bottomAnchor.constraint(equalTo: bottomAnchor),
             cursorView.widthAnchor.constraint(equalToConstant: 1.5),
-            cursorView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 0),
         ])
+        let cursorLeading = cursorView.leadingAnchor.constraint(equalTo: leadingAnchor)
+        cursorLeading.isActive = true
+        cursorLeadingConstraint = cursorLeading
+    }
+
+    /// Whether a rendered waveform image is currently installed.
+    var hasRenderedWaveform: Bool {
+        waveformImageView.image != nil
     }
 
     /// Show canonical removed source-time ranges over the source waveform.
@@ -68,17 +93,25 @@ class WaveformView: NSView {
         cutMarkerOverlay.update(ranges: ranges, duration: duration)
     }
 
-    /// Generate waveform from audio file.
+    /// Analyse the audio once; rendering happens at the strip's pixel width in `layout()`.
     func loadAudio(url: URL, duration: Double) {
         totalDuration = duration
         waveformTask?.cancel()
+        sourceSamples = []
+        renderedSize = .zero
+        waveformImageView.image = nil
 
         waveformTask = Task { [weak self] in
             do {
                 let waveformAnalyzer = WaveformAnalyzer()
-                let samples = try await waveformAnalyzer.samples(fromAudioAt: url, count: 200)
+                let samples = try await waveformAnalyzer.samples(
+                    fromAudioAt: url,
+                    count: Self.analysisSampleCount
+                )
                 try Task.checkCancellation()
-                self?.renderWaveform(samples: samples)
+                self?.sourceSamples = samples
+                self?.renderedSize = .zero
+                self?.renderWaveformIfNeeded()
             } catch is CancellationError {
                 return
             } catch {
@@ -87,12 +120,21 @@ class WaveformView: NSView {
         }
     }
 
-    private func renderWaveform(samples: [Float]) {
-        let width = max(bounds.width, 400)
-        let height = max(bounds.height, 60)
-        let size = CGSize(width: width, height: height)
+    override func layout() {
+        super.layout()
+        renderWaveformIfNeeded()
+    }
 
-        let drawer = WaveformImageDrawer()
+    /// The drawer only renders when it receives exactly one sample per pixel, so
+    /// the analysed samples are resampled to `width × scale` before each render.
+    private func renderWaveformIfNeeded() {
+        guard !sourceSamples.isEmpty, bounds.width >= 1, bounds.height >= 1 else { return }
+        let size = bounds.size
+        guard size != renderedSize else { return }
+
+        let scale = window?.backingScaleFactor ?? 2
+        let pixelCount = max(1, Int(size.width * scale))
+        let samples = Self.resample(sourceSamples, to: pixelCount)
         let configuration = Waveform.Configuration(
             size: size,
             backgroundColor: .clear,
@@ -103,27 +145,46 @@ class WaveformView: NSView {
                     spacing: 1
                 )
             ),
+            scale: scale,
             verticalScalingFactor: 0.8
         )
-
-        let waveformRenderer = LinearWaveformRenderer()
-        let image = drawer.waveformImage(from: samples, with: configuration, renderer: waveformRenderer)
+        let drawer = WaveformImageDrawer()
+        guard let image = drawer.waveformImage(
+            from: samples,
+            with: configuration,
+            renderer: LinearWaveformRenderer()
+        ) else {
+            return
+        }
         waveformImageView.image = image
+        renderedSize = size
+    }
+
+    /// Averages the analysed samples into `count` buckets.
+    static func resample(_ samples: [Float], to count: Int) -> [Float] {
+        guard count > 0, !samples.isEmpty else { return [] }
+        var result: [Float] = []
+        result.reserveCapacity(count)
+        for index in 0..<count {
+            let start = min(index * samples.count / count, samples.count - 1)
+            let end = min(max(start + 1, (index + 1) * samples.count / count), samples.count)
+            let bucket = samples[start..<end]
+            result.append(bucket.reduce(0, +) / Float(bucket.count))
+        }
+        return result
     }
 
     /// Update cursor position to match current playback time.
     func updateCursor(time: Double) {
         guard totalDuration > 0, bounds.width > 0 else { return }
-        let fraction = time / totalDuration
-        let x = CGFloat(fraction) * bounds.width
-
-        // Update cursor position
-        cursorView.frame.origin.x = x
+        let fraction = max(0, min(1, time / totalDuration))
+        cursorLeadingConstraint?.constant = CGFloat(fraction) * bounds.width
     }
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
-        layer?.backgroundColor = Theme.surface1.cgColor
+        layer?.backgroundColor = Theme.surface2.cgColor
+        topDivider.layer?.backgroundColor = Theme.divider.cgColor
         cursorView.layer?.backgroundColor = Theme.waveformCursor.cgColor
     }
 

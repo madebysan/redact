@@ -18,7 +18,7 @@ final class ExportSheetView: NSView {
     private let edlCheckbox = NSButton(checkboxWithTitle: "Cut list (.edl)", target: nil, action: nil)
     private let fcpxmlCheckbox = NSButton(checkboxWithTitle: "Final Cut Pro XML", target: nil, action: nil)
     private let sidecarDescriptionLabel = NSTextField(
-        wrappingLabelWithString: "Written beside the exported media. The cut list and Final Cut Pro XML open the same cuts in Premiere Pro, Final Cut Pro, or DaVinci Resolve."
+        wrappingLabelWithString: "Saved beside the export. Open the cut list or XML in Premiere Pro, Final Cut Pro, or DaVinci Resolve."
     )
     private let codecDetailsLabel = NSTextField(wrappingLabelWithString: "")
     private let exportSummaryLabel = NSTextField(labelWithString: "")
@@ -88,10 +88,20 @@ final class ExportSheetView: NSView {
         setup()
     }
 
+    private static let labelColumnWidth: CGFloat = 104
+    private static let inset: CGFloat = 24
+    private let titleLabel = NSTextField(labelWithString: "Export Video")
+
     private func setup() {
         wantsLayer = true
         layer?.backgroundColor = Theme.surface2.cgColor
         layer?.cornerRadius = 12
+
+        titleLabel.font = .systemFont(ofSize: 15, weight: .semibold)
+        titleLabel.textColor = Theme.textPrimary
+        titleLabel.setAccessibilityRole(.staticText)
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(titleLabel)
 
         let formatLabel = makeLabel("Format:")
         formatPopup.addItems(withTitles: presets.map(\.title))
@@ -101,17 +111,12 @@ final class ExportSheetView: NSView {
         formatPopup.translatesAutoresizingMaskIntoConstraints = false
         addSubview(formatPopup)
 
-        codecDetailsLabel.font = .systemFont(ofSize: 11)
-        codecDetailsLabel.textColor = Theme.textTertiary
-        codecDetailsLabel.maximumNumberOfLines = 2
-        codecDetailsLabel.preferredMaxLayoutWidth = 472
-        codecDetailsLabel.setAccessibilityIdentifier("Export codec details")
-        codecDetailsLabel.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(codecDetailsLabel)
+        configureHelpLabel(codecDetailsLabel, identifier: "Export codec details")
 
         exportSummaryLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
         exportSummaryLabel.textColor = Theme.textSecondary
         exportSummaryLabel.lineBreakMode = .byTruncatingTail
+        exportSummaryLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         exportSummaryLabel.setAccessibilityLabel("Export summary")
         exportSummaryLabel.translatesAutoresizingMaskIntoConstraints = false
         addSubview(exportSummaryLabel)
@@ -135,6 +140,7 @@ final class ExportSheetView: NSView {
 
         let enhanceAudioLabel = makeLabel("Enhance audio:")
         enhanceAudioSwitch.state = .off
+        enhanceAudioSwitch.controlSize = .small
         enhanceAudioSwitch.toolTip = "Reduce background noise and balance loudness"
         enhanceAudioSwitch.setAccessibilityLabel("Enhance audio")
         enhanceAudioSwitch.setAccessibilityHelp(
@@ -145,13 +151,7 @@ final class ExportSheetView: NSView {
         enhanceAudioSwitch.translatesAutoresizingMaskIntoConstraints = false
         addSubview(enhanceAudioSwitch)
 
-        enhanceAudioDescriptionLabel.font = .systemFont(ofSize: 11)
-        enhanceAudioDescriptionLabel.textColor = Theme.textTertiary
-        enhanceAudioDescriptionLabel.maximumNumberOfLines = 2
-        enhanceAudioDescriptionLabel.preferredMaxLayoutWidth = 472
-        enhanceAudioDescriptionLabel.setAccessibilityIdentifier("Enhance audio description")
-        enhanceAudioDescriptionLabel.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(enhanceAudioDescriptionLabel)
+        configureHelpLabel(enhanceAudioDescriptionLabel, identifier: "Enhance audio description")
 
         let sidecarLabel = makeLabel("Also export:")
         configureSidecarCheckbox(
@@ -176,13 +176,7 @@ final class ExportSheetView: NSView {
             help: "Creates an FCPXML project beside the exported media with one clip per kept range."
         )
 
-        sidecarDescriptionLabel.font = .systemFont(ofSize: 11)
-        sidecarDescriptionLabel.textColor = Theme.textTertiary
-        sidecarDescriptionLabel.maximumNumberOfLines = 2
-        sidecarDescriptionLabel.preferredMaxLayoutWidth = 472
-        sidecarDescriptionLabel.setAccessibilityIdentifier("Sidecar export description")
-        sidecarDescriptionLabel.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(sidecarDescriptionLabel)
+        configureHelpLabel(sidecarDescriptionLabel, identifier: "Sidecar export description")
 
         exportVideoButton.title = "Export Video"
         exportVideoButton.bezelStyle = .rounded
@@ -206,20 +200,21 @@ final class ExportSheetView: NSView {
         enhanceAudioSwitch.nextKeyView = subtitleCheckbox
         subtitleCheckbox.nextKeyView = edlCheckbox
         edlCheckbox.nextKeyView = fcpxmlCheckbox
-        fcpxmlCheckbox.nextKeyView = exportVideoButton
-        exportVideoButton.nextKeyView = cancelButton
-        cancelButton.nextKeyView = formatPopup
+        fcpxmlCheckbox.nextKeyView = cancelButton
+        cancelButton.nextKeyView = exportVideoButton
+        exportVideoButton.nextKeyView = formatPopup
 
         optionViews = [
+            titleLabel,
             formatLabel, formatPopup,
             codecDetailsLabel,
-            exportSummaryLabel,
             qualityLabel, qualityPopup,
             speedLabel, speedPopup,
             enhanceAudioLabel, enhanceAudioSwitch,
             enhanceAudioDescriptionLabel,
             sidecarLabel, subtitleCheckbox, edlCheckbox, fcpxmlCheckbox,
             sidecarDescriptionLabel,
+            exportSummaryLabel,
             exportVideoButton, cancelButton,
         ]
 
@@ -227,99 +222,93 @@ final class ExportSheetView: NSView {
         restoreSavedOptions()
         updateFormatControls()
 
-        NSLayoutConstraint.activate([
-            formatLabel.topAnchor.constraint(equalTo: topAnchor, constant: 24),
-            formatLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
-            formatPopup.centerYAnchor.constraint(equalTo: formatLabel.centerYAnchor),
-            formatPopup.leadingAnchor.constraint(equalTo: formatLabel.trailingAnchor, constant: 8),
+        let inset = Self.inset
+        let controlLeading = inset + Self.labelColumnWidth + 8
+        var constraints: [NSLayoutConstraint] = [
+            titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 20),
+            titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: inset),
+            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -inset),
 
-            codecDetailsLabel.topAnchor.constraint(equalTo: formatPopup.bottomAnchor, constant: 8),
-            codecDetailsLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
-            codecDetailsLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
-
-            exportSummaryLabel.topAnchor.constraint(equalTo: codecDetailsLabel.bottomAnchor, constant: 10),
-            exportSummaryLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
-            exportSummaryLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
-
-            qualityLabel.topAnchor.constraint(equalTo: exportSummaryLabel.bottomAnchor, constant: 14),
-            qualityLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
-            qualityPopup.centerYAnchor.constraint(equalTo: qualityLabel.centerYAnchor),
-            qualityPopup.leadingAnchor.constraint(equalTo: qualityLabel.trailingAnchor, constant: 8),
-
-            speedLabel.topAnchor.constraint(equalTo: qualityLabel.bottomAnchor, constant: 16),
-            speedLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
-            speedPopup.centerYAnchor.constraint(equalTo: speedLabel.centerYAnchor),
-            speedPopup.leadingAnchor.constraint(equalTo: speedLabel.trailingAnchor, constant: 8),
-
-            enhanceAudioLabel.topAnchor.constraint(equalTo: speedLabel.bottomAnchor, constant: 16),
-            enhanceAudioLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
-            enhanceAudioSwitch.centerYAnchor.constraint(equalTo: enhanceAudioLabel.centerYAnchor),
-            enhanceAudioSwitch.leadingAnchor.constraint(
-                equalTo: enhanceAudioLabel.trailingAnchor,
-                constant: 8
-            ),
-
+            formatPopup.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 18),
+            codecDetailsLabel.topAnchor.constraint(equalTo: formatPopup.bottomAnchor, constant: 4),
+            qualityPopup.topAnchor.constraint(equalTo: codecDetailsLabel.bottomAnchor, constant: 12),
+            speedPopup.topAnchor.constraint(equalTo: qualityPopup.bottomAnchor, constant: 10),
+            enhanceAudioSwitch.topAnchor.constraint(equalTo: speedPopup.bottomAnchor, constant: 12),
             enhanceAudioDescriptionLabel.topAnchor.constraint(
-                equalTo: enhanceAudioLabel.bottomAnchor,
-                constant: 6
+                equalTo: enhanceAudioSwitch.bottomAnchor,
+                constant: 4
             ),
-            enhanceAudioDescriptionLabel.leadingAnchor.constraint(
-                equalTo: leadingAnchor,
-                constant: 24
-            ),
-            enhanceAudioDescriptionLabel.trailingAnchor.constraint(
-                equalTo: trailingAnchor,
-                constant: -24
-            ),
-
-            sidecarLabel.topAnchor.constraint(
+            subtitleCheckbox.topAnchor.constraint(
                 equalTo: enhanceAudioDescriptionLabel.bottomAnchor,
                 constant: 12
             ),
-            sidecarLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
-            subtitleCheckbox.centerYAnchor.constraint(equalTo: sidecarLabel.centerYAnchor),
-            subtitleCheckbox.leadingAnchor.constraint(
-                equalTo: sidecarLabel.trailingAnchor,
-                constant: 8
-            ),
-            edlCheckbox.centerYAnchor.constraint(equalTo: sidecarLabel.centerYAnchor),
-            edlCheckbox.leadingAnchor.constraint(
-                equalTo: subtitleCheckbox.trailingAnchor,
-                constant: 12
-            ),
-            fcpxmlCheckbox.centerYAnchor.constraint(equalTo: sidecarLabel.centerYAnchor),
-            fcpxmlCheckbox.leadingAnchor.constraint(
-                equalTo: edlCheckbox.trailingAnchor,
-                constant: 12
-            ),
-            sidecarDescriptionLabel.topAnchor.constraint(
-                equalTo: sidecarLabel.bottomAnchor,
-                constant: 5
-            ),
-            sidecarDescriptionLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
-            sidecarDescriptionLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
+            edlCheckbox.topAnchor.constraint(equalTo: subtitleCheckbox.bottomAnchor, constant: 4),
+            fcpxmlCheckbox.topAnchor.constraint(equalTo: edlCheckbox.bottomAnchor, constant: 4),
+            sidecarDescriptionLabel.topAnchor.constraint(equalTo: fcpxmlCheckbox.bottomAnchor, constant: 4),
 
+            exportSummaryLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: inset),
+            exportSummaryLabel.centerYAnchor.constraint(equalTo: exportVideoButton.centerYAnchor),
+            exportSummaryLabel.trailingAnchor.constraint(
+                lessThanOrEqualTo: cancelButton.leadingAnchor,
+                constant: -16
+            ),
             cancelButton.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -20),
-            cancelButton.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
+            cancelButton.trailingAnchor.constraint(equalTo: exportVideoButton.leadingAnchor, constant: -12),
             exportVideoButton.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -20),
-            exportVideoButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
+            exportVideoButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -inset),
 
             statusLabel.topAnchor.constraint(equalTo: topAnchor, constant: 48),
-            statusLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
-            statusLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
+            statusLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: inset),
+            statusLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -inset),
             progressIndicator.topAnchor.constraint(equalTo: statusLabel.bottomAnchor, constant: 20),
             progressIndicator.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 40),
             progressIndicator.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -40),
             percentLabel.topAnchor.constraint(equalTo: progressIndicator.bottomAnchor, constant: 8),
             percentLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
             errorLabel.topAnchor.constraint(equalTo: percentLabel.bottomAnchor, constant: 16),
-            errorLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
-            errorLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
+            errorLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: inset),
+            errorLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -inset),
             dismissButton.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -20),
             dismissButton.centerXAnchor.constraint(equalTo: centerXAnchor),
             progressCancelButton.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -20),
             progressCancelButton.centerXAnchor.constraint(equalTo: centerXAnchor),
-        ])
+        ]
+
+        // Labels sit in a right-aligned column; each control starts at the shared control column.
+        for (label, control) in [
+            (formatLabel, formatPopup),
+            (qualityLabel, qualityPopup),
+            (speedLabel, speedPopup),
+            (enhanceAudioLabel, enhanceAudioSwitch),
+            (sidecarLabel, subtitleCheckbox),
+        ] as [(NSTextField, NSView)] {
+            constraints += [
+                label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: inset),
+                label.widthAnchor.constraint(equalToConstant: Self.labelColumnWidth),
+                label.centerYAnchor.constraint(equalTo: control.centerYAnchor),
+                control.leadingAnchor.constraint(equalTo: leadingAnchor, constant: controlLeading),
+            ]
+        }
+        for control in [edlCheckbox, fcpxmlCheckbox] {
+            constraints.append(control.leadingAnchor.constraint(equalTo: leadingAnchor, constant: controlLeading))
+        }
+        for help in [codecDetailsLabel, enhanceAudioDescriptionLabel, sidecarDescriptionLabel] {
+            constraints += [
+                help.leadingAnchor.constraint(equalTo: leadingAnchor, constant: controlLeading),
+                help.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -inset),
+            ]
+        }
+        NSLayoutConstraint.activate(constraints)
+    }
+
+    private func configureHelpLabel(_ label: NSTextField, identifier: String) {
+        label.font = .systemFont(ofSize: 11)
+        label.textColor = Theme.textTertiary
+        label.maximumNumberOfLines = 3
+        label.preferredMaxLayoutWidth = 520 - Self.inset * 2 - Self.labelColumnWidth - 8
+        label.setAccessibilityIdentifier(identifier)
+        label.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(label)
     }
 
     private func configureSidecarCheckbox(
@@ -345,6 +334,7 @@ final class ExportSheetView: NSView {
         let label = NSTextField(labelWithString: text)
         label.font = .systemFont(ofSize: 13)
         label.textColor = Theme.textSecondary
+        label.alignment = .right
         label.translatesAutoresizingMaskIntoConstraints = false
         addSubview(label)
         return label
@@ -550,6 +540,7 @@ final class ExportSheetView: NSView {
         let preset = presets[formatPopup.indexOfSelectedItem]
         qualityPopup.isEnabled = preset.supportsVideoQuality
         exportVideoButton.title = preset.mediaKind == .video ? "Export Video" : "Export Audio"
+        titleLabel.stringValue = exportVideoButton.title
         exportVideoButton.isEnabled = true
         updateCodecDetails(for: preset)
         updateExportSummary()

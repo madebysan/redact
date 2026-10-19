@@ -186,7 +186,7 @@ final class MainWindowController: NSWindowController {
         }
 
         let sheetView = ExportSheetView(
-            frame: NSRect(x: 0, y: 0, width: 520, height: 400),
+            frame: NSRect(x: 0, y: 0, width: 520, height: 430),
             presets: presets,
             sourceInfo: mediaInfo,
             finalDuration: exportRenderPlan.editedDuration,
@@ -196,7 +196,7 @@ final class MainWindowController: NSWindowController {
             settings: .shared
         )
 
-        let sheetWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 400),
+        let sheetWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 430),
                                    styleMask: [.titled],
                                    backing: .buffered,
                                    defer: false)
@@ -1548,12 +1548,9 @@ extension MainWindowController: NSMenuItemValidation {
 
 // MARK: - NSToolbarDelegate
 
-private final class ToolbarIconButton: NSButton {
+private final class ToolbarIconButton: IconButton {
     static let width: CGFloat = 38
     static let height: CGFloat = 32
-
-    private var pointerIsInside = false
-    private var trackingRegion: NSTrackingArea?
 
     init(
         identifier: NSToolbarItem.Identifier,
@@ -1563,84 +1560,20 @@ private final class ToolbarIconButton: NSButton {
         target: AnyObject?,
         action: Selector?
     ) {
-        super.init(frame: .zero)
+        super.init(
+            image: image,
+            title: title,
+            toolTip: toolTip,
+            target: target,
+            action: action,
+            size: NSSize(width: Self.width, height: Self.height),
+            cornerRadius: 13
+        )
         self.identifier = NSUserInterfaceItemIdentifier(identifier.rawValue)
-        self.image = image
-        self.title = ""
-        self.toolTip = toolTip
-        self.target = target
-        self.action = action
-        imagePosition = .imageOnly
-        imageScaling = .scaleProportionallyDown
-        alignment = .center
-        isBordered = false
-        setButtonType(.momentaryChange)
-        setAccessibilityLabel(title)
-        wantsLayer = true
-        layer?.cornerCurve = .continuous
-        layer?.cornerRadius = 13
-        translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            widthAnchor.constraint(equalToConstant: Self.width),
-            heightAnchor.constraint(equalToConstant: Self.height),
-        ])
-        updateVisualState()
     }
 
     required init?(coder: NSCoder) {
         super.init(coder: coder)
-    }
-
-    override var intrinsicContentSize: NSSize {
-        NSSize(width: Self.width, height: Self.height)
-    }
-
-    override var isEnabled: Bool {
-        didSet { updateVisualState() }
-    }
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let trackingRegion {
-            removeTrackingArea(trackingRegion)
-        }
-        let region = NSTrackingArea(
-            rect: bounds,
-            options: [.activeInKeyWindow, .inVisibleRect, .mouseEnteredAndExited],
-            owner: self,
-            userInfo: nil
-        )
-        addTrackingArea(region)
-        trackingRegion = region
-    }
-
-    override func mouseEntered(with event: NSEvent) {
-        pointerIsInside = true
-        updateVisualState()
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        pointerIsInside = false
-        updateVisualState()
-    }
-
-    override func mouseDown(with event: NSEvent) {
-        layer?.backgroundColor = Theme.surface3.withAlphaComponent(0.9).cgColor
-        super.mouseDown(with: event)
-        updateVisualState()
-    }
-
-    override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        updateVisualState()
-    }
-
-    private func updateVisualState() {
-        alphaValue = isEnabled ? 1 : 0.34
-        contentTintColor = isEnabled ? Theme.textPrimary : Theme.textDimmed
-        layer?.backgroundColor = pointerIsInside && isEnabled
-            ? Theme.surface3.withAlphaComponent(0.62).cgColor
-            : NSColor.clear.cgColor
     }
 }
 

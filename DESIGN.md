@@ -78,7 +78,7 @@ The current implementation uses a practical 4 pt base rhythm with common steps a
 - Editing panels: minimum 250 pt each.
 - Initial preview panel: 35% of window width.
 - Transport row: 84 pt high; waveform row: 60 pt high.
-- Export sheet: 520 × 400 pt.
+- Export sheet: 520 × 430 pt, titled, with a right-aligned 104 pt label column and the export summary in the footer beside Cancel and Export.
 - Settings window: 500 × 560 pt.
 - Transcript inset: 24 pt on both axes.
 - Transcript row spacing: adjustable 4–18 pt; wrapped-line spacing is one fifth of that value.
