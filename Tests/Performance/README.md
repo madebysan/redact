@@ -207,3 +207,16 @@ For each class, record the media duration, resolution, video codec, audio codec,
 Store raw results under `work/benchmarks/` or another private, gitignored location. Record only anonymized aggregate measurements in tracked documentation. Never copy source media, transcripts, filenames, file paths, or speech excerpts into the repository.
 
 Before comparing media results, capture the Redact commit, macOS version, hardware, build configuration, Whisper model, and FFmpeg version. Run each scenario three times and report the median, noting whether caches were warm or cold.
+
+## Playback CPU after the highlight fix (2026-10-19)
+
+Captured on san's Apple Silicon Mac with a synthetic 2:37 clip (system voice reading a 497-word script over a test pattern, 1280 x 720, H.264/AAC) so nothing private was used. Each run opened the clip from the command line, waited for the editor, pressed play, and sampled the process with `top -l 31 -s 1` for 30 seconds, then paused and sampled 10 seconds idle. Both playback runs used a warm transcript cache.
+
+| Build | Playback CPU (avg) | Playback CPU (range) | Idle CPU | Memory |
+| --- | ---: | ---: | ---: | ---: |
+| 2.0.1 release (before) | 19.0% | 17.5–22.4% | 0.2% | 106–125 MB |
+| Working tree with the highlight fix (after) | 9.7% | 8.1–14.1% | 0.2% | 107–126 MB |
+
+The fix makes `TranscriptView.highlightWord` return early when playback reports the word that is already highlighted, so the 30 Hz position observer no longer rewrites the text storage or scrolls on every tick. A 30-second Time Profiler capture of the fixed build during playback showed 1,757 main-thread samples (about 6% of one core); 87% of them were AppKit layout and drawing under the run loop, and the app's own per-tick work (clock label, progress bar, waveform cursor, word highlight) was under 14%. A cold import of the same clip with `openai_whisper-small` took 26.3 seconds, with a 359 MB peak while the model was loaded.
+
+To compare a later change, repeat the same clip, the same 30-second play window, and report the warm-cache playback average.
