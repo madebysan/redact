@@ -1,0 +1,13 @@
+{
+  "commit": "759d7b8",
+  "version": "2.0.1",
+  "build": "5",
+  "draft": false,
+  "macos": "27.2",
+  "window_points": "1280x800",
+  "files": {
+    "screenshot-agent.png": "50dcf0f21c310bea7e382e931cd0c12846430ce5df52b73153f27cbf8e27d0e7",
+    "screenshot-cleanup.png": "802915f6ebaf4978e1a01d158d07162ff218aac193e46b22932803de4a8ecbdb",
+    "screenshot.png": "5c9dd8b063ecee650725422c56536f6bd22e71f50617e52a870ab9b8173ec99f"
+  }
+}
