@@ -15,7 +15,7 @@ Redact includes the open-source components below. Versions match `Package.resolv
 | [DSWaveformImage](https://github.com/dmrschmidt/DSWaveformImage) | 14.3.0 | MIT | audio waveform drawing |
 | [Sparkle](https://github.com/sparkle-project/Sparkle) | 2.10.0 | MIT-style, with notices for bundled components | in-app updates |
 
-Redact doesn't include ffmpeg. It uses the copy you install yourself (for example with Homebrew), which keeps its own license.
+Redact doesn't include FFmpeg in the app bundle. It uses a copy you installed yourself (for example with Homebrew), or, when none is found, offers to download one for you. That download is the FFmpeg 9.0.2 static build for Apple Silicon published by Martin Riedl at https://ffmpeg.martin-riedl.de/, signed with his Developer ID and built with `--enable-gpl --enable-version3` (it links x264, x265, libvpx, LAME, Opus and other libraries), so the downloaded binaries are licensed under the GNU General Public License version 3. Redact runs them as separate processes, pins their URLs and SHA-256 checksums in `Sources/Services/FFmpegDistribution.swift`, stores them in `~/Library/Application Support/Redact/ffmpeg/`, and never redistributes them. FFmpeg's source is at https://ffmpeg.org/download.html and the build script at https://git.martin-riedl.de/ffmpeg/build-script; the GPL text is at https://www.gnu.org/licenses/gpl-3.0.html.
 
 Whisper models download on first use from Argmax's `argmaxinc/whisperkit-coreml` repository on Hugging Face; OpenAI released Whisper under the MIT license.
 

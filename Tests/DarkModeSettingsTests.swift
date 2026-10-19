@@ -38,7 +38,7 @@ import Testing
         }
 
     #expect(window.title == "Settings")
-    #expect(contentView.frame.height == 560)
+    #expect(contentView.frame.height == 700)
     #expect(!labels.contains("Appearance"))
     #expect(!labels.contains("Theme"))
     #expect(!segmentedLabels.contains("Light"))

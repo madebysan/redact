@@ -3,7 +3,8 @@
 <plist version="1.0">
 <!--
   Redact is distributed outside the Mac App Store and is intentionally
-  unsandboxed while it depends on a user-installed FFmpeg executable.
+  unsandboxed while it runs an external FFmpeg executable (Homebrew's, or
+  the copy it downloads into Application Support).
   Omit the sandbox entitlement entirely rather than signing a false value.
 -->
 <dict/>

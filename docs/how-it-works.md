@@ -40,18 +40,21 @@ The EDL and FCPXML sidecars hand the edit to another editor instead of rendering
 
 Redact includes keyboard shortcuts for common editing, playback, project, and export actions.
 
-Redact uses a dark interface only. Settings include a dropdown of 14 built-in macOS transcript fonts with adjustable text size, letter spacing, line spacing, playback highlight color, a transcript-only Restore Defaults action, and clearly labeled Whisper model trade-offs. Format, quality, speed, audio enhancement, and the optional subtitle, EDL, and FCPXML sidecars are remembered for the next compatible export.
+Redact uses a dark interface only. Settings include a dropdown of 14 built-in macOS transcript fonts with adjustable text size, letter spacing, line spacing, playback highlight color, a transcript-only Restore Defaults action, and clearly labeled Whisper model trade-offs, and a Media Tools card that shows which FFmpeg Redact is using with an Install or Reinstall action. Format, quality, speed, audio enhancement, and the optional subtitle, EDL, and FCPXML sidecars are remembered for the next compatible export.
 
 ## Building and releasing
 
 From the repository root:
 
 ```bash
-brew install ffmpeg
 ./script/build_and_run.sh
 ```
 
 The native UI uses Swift and AppKit. AVFoundation handles preview playback and timeline mapping, [DSWaveformImage](https://github.com/dmrschmidt/DSWaveformImage) renders the waveform, and FFmpeg handles extraction and final media export.
+
+### FFmpeg
+
+Redact runs FFmpeg and FFprobe as separate processes and looks for them in this order: its own copy in `~/Library/Application Support/Redact/ffmpeg/`, Homebrew (`/opt/homebrew/bin`, `/usr/local/bin`), then your PATH. When neither tool is found, importing or exporting opens an Install FFmpeg sheet. Accepting it downloads the pinned static Apple Silicon build of FFmpeg 9.0.2 from [Martin Riedl's FFmpeg build server](https://ffmpeg.martin-riedl.de/) (two archives, about 57 MB), checks each archive against the SHA-256 published beside it, unpacks it, clears quarantine on the verified file only, runs `-version` as a smoke test, and only then moves both tools into place and continues the import or export. Settings shows which FFmpeg is in use and offers Install or Reinstall. The build is GPL-3.0 and is not part of the app bundle; see [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md). To exercise the in-app install on a Mac that already has Homebrew's FFmpeg, launch Redact with `REDACT_IGNORE_SYSTEM_FFMPEG=1`, which makes the lookup skip Homebrew and PATH. `REDACT_RUN_FFMPEG_INSTALL_INTEGRATION=1 swift test` runs the opt-in test that downloads the real build into a temporary folder and encodes with it.
 
 Release helpers live in `scripts/`:
 

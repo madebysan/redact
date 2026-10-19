@@ -34,7 +34,7 @@ Transcription and editing stay on your Mac. Agent editing is opt-in and shares o
 
 ## Install
 
-Install FFmpeg first (`brew install ffmpeg`), then download Redact from the [latest release](https://github.com/madebysan/redact/releases/latest) and drag it to Applications. It needs Apple Silicon and macOS 14. To build it, run `./script/build_and_run.sh`.
+Download Redact from the [latest release](https://github.com/madebysan/redact/releases/latest) and drag it to Applications. It needs Apple Silicon and macOS 14. The first time you import or export, Redact offers to download FFmpeg (about 57 MB) and keeps it in its own Application Support folder; if you already have FFmpeg from Homebrew, Redact uses that instead. To build it, run `./script/build_and_run.sh`.
 
 ---
 

@@ -18,7 +18,7 @@ final class SettingsWindowController: NSWindowController {
 
     convenience init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 500, height: 560),
+            contentRect: NSRect(x: 0, y: 0, width: 500, height: 700),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -102,6 +102,9 @@ private class SettingsContentView: NSView {
     private let modelStatusLabel = NSTextField(labelWithString: "")
     private let modelActionButton = NSButton()
     private var isModelDownloaded = false
+    private let ffmpegStatusLabel = NSTextField(labelWithString: "")
+    private let ffmpegActionButton = NSButton()
+    private var ffmpegInstallTask: Task<Void, Never>?
 
     // Layer-backed views that refresh when AppKit updates appearance.
     private var cardViews: [NSView] = []
@@ -128,6 +131,7 @@ private class SettingsContentView: NSView {
 
     deinit {
         NotificationCenter.default.removeObserver(self)
+        ffmpegInstallTask?.cancel()
     }
 
     // MARK: - Setup
@@ -136,6 +140,7 @@ private class SettingsContentView: NSView {
         let sections = [
             buildSection("Transcript", card: buildTranscriptCard()),
             buildSection("Transcription", card: buildTranscriptionCard()),
+            buildSection("Media Tools", card: buildFFmpegCard()),
         ]
 
         var prev: NSView?
@@ -453,6 +458,53 @@ private class SettingsContentView: NSView {
         ])
     }
 
+    private func buildFFmpegCard() -> NSView {
+        ffmpegActionButton.bezelStyle = .rounded
+        ffmpegActionButton.controlSize = .small
+        ffmpegActionButton.target = self
+        ffmpegActionButton.action = #selector(ffmpegActionClicked)
+        ffmpegActionButton.setAccessibilityLabel("Install FFmpeg")
+
+        ffmpegStatusLabel.font = .systemFont(ofSize: 11)
+        ffmpegStatusLabel.textColor = .secondaryLabelColor
+        ffmpegStatusLabel.lineBreakMode = .byTruncatingMiddle
+        ffmpegStatusLabel.setAccessibilityLabel("FFmpeg status")
+
+        let infoView = NSView()
+        infoView.translatesAutoresizingMaskIntoConstraints = false
+
+        ffmpegStatusLabel.translatesAutoresizingMaskIntoConstraints = false
+        infoView.addSubview(ffmpegStatusLabel)
+
+        let distribution = FFmpegDistribution.current
+        let desc = NSTextField(
+            wrappingLabelWithString: "Redact uses FFmpeg to read media and export edits. It looks for its own copy first, then Homebrew, then your PATH. Install downloads FFmpeg \(distribution.version) (\(distribution.formattedDownloadSize)) from \(distribution.sourceName) into Redact's Application Support folder and verifies it first."
+        )
+        desc.font = .systemFont(ofSize: 11)
+        desc.textColor = Theme.textTertiary
+        desc.translatesAutoresizingMaskIntoConstraints = false
+        descriptionLabels.append(desc)
+        infoView.addSubview(desc)
+
+        NSLayoutConstraint.activate([
+            ffmpegStatusLabel.topAnchor.constraint(equalTo: infoView.topAnchor, constant: 4),
+            ffmpegStatusLabel.leadingAnchor.constraint(equalTo: infoView.leadingAnchor, constant: 16),
+            ffmpegStatusLabel.trailingAnchor.constraint(equalTo: infoView.trailingAnchor, constant: -16),
+
+            desc.topAnchor.constraint(equalTo: ffmpegStatusLabel.bottomAnchor, constant: 2),
+            desc.leadingAnchor.constraint(equalTo: infoView.leadingAnchor, constant: 16),
+            desc.trailingAnchor.constraint(equalTo: infoView.trailingAnchor, constant: -16),
+            desc.bottomAnchor.constraint(equalTo: infoView.bottomAnchor, constant: -12),
+        ])
+
+        refreshFFmpegStatus()
+
+        return buildCard([
+            buildRow(label: "FFmpeg", control: ffmpegActionButton),
+            infoView,
+        ])
+    }
+
     // MARK: - Settings reactions
 
     /// Fired when user-facing Settings (model pick or typography) change.
@@ -601,6 +653,63 @@ private class SettingsContentView: NSView {
             modelStatusLabel.textColor = .secondaryLabelColor
             modelActionButton.title = "Download"
             modelActionButton.isEnabled = true
+        }
+    }
+
+    // MARK: - FFmpeg Status
+
+    private func refreshFFmpegStatus() {
+        let status = FFmpegInstallationStatus.current()
+        ffmpegStatusLabel.stringValue = status.summary
+        ffmpegStatusLabel.toolTip = status.ffmpeg?.path
+        if status.isAvailable {
+            ffmpegStatusLabel.textColor = status.usesManagedCopy ? .systemGreen : .secondaryLabelColor
+            ffmpegActionButton.title = status.usesManagedCopy ? "Reinstall" : "Install Redact's Copy"
+        } else {
+            ffmpegStatusLabel.textColor = .secondaryLabelColor
+            ffmpegActionButton.title = "Install"
+        }
+        ffmpegActionButton.isEnabled = true
+    }
+
+    @objc private func ffmpegActionClicked() {
+        if let ffmpegInstallTask {
+            ffmpegInstallTask.cancel()
+            ffmpegActionButton.isEnabled = false
+            ffmpegStatusLabel.stringValue = "Cancelling…"
+            return
+        }
+        guard let directory = ManagedFFmpegLocation.directory() else {
+            ffmpegStatusLabel.stringValue = "Redact could not find its Application Support folder."
+            ffmpegStatusLabel.textColor = .systemRed
+            return
+        }
+
+        let installer = ManagedFFmpegInstaller(directory: directory)
+        ffmpegActionButton.title = "Cancel"
+        ffmpegStatusLabel.stringValue = "Preparing download…"
+        ffmpegStatusLabel.textColor = .secondaryLabelColor
+
+        ffmpegInstallTask = Task {
+            do {
+                _ = try await installer.install { progress in
+                    Task { @MainActor in
+                        guard self.ffmpegInstallTask != nil else { return }
+                        self.ffmpegStatusLabel.stringValue =
+                            "\(progress.statusText) \(progress.detailText)"
+                    }
+                }
+                ffmpegInstallTask = nil
+                refreshFFmpegStatus()
+            } catch ManagedFFmpegInstallError.cancelled {
+                ffmpegInstallTask = nil
+                refreshFFmpegStatus()
+            } catch {
+                ffmpegInstallTask = nil
+                refreshFFmpegStatus()
+                ffmpegStatusLabel.stringValue = "Install failed: \(error.localizedDescription)"
+                ffmpegStatusLabel.textColor = .systemRed
+            }
         }
     }
 

@@ -503,7 +503,7 @@ enum FFmpegError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .ffmpegNotFound:
-            return "FFmpeg not found. Install it via Homebrew: brew install ffmpeg"
+            return "FFmpeg is not installed. Choose Import Media or Export to install it inside Redact, or install it with Homebrew."
         case .extractionFailed(let code):
             return "Audio extraction failed (exit code \(code))"
         case .exportFailed(let code, let details):
