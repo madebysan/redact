@@ -8,10 +8,4 @@ DerivedData/
 dist/
 work/
 .codex/
-
-# project-cleanup:start
 _archived/
-# project-cleanup:end
-
-# Local-only reference docs — not for GitHub
-wiki/
